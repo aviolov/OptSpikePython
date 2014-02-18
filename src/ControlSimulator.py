@@ -1060,7 +1060,6 @@ def visualizeTrajectoriesPaper(params, Tf,
                 ylim((alpha_bounds[0]-.2,alpha_bounds[1]+.2));
                 xlim((.0, xmax)); #anoather hack in the xmax 
                 
-                
                 axX.text(-.15, 1.0, '(%s)'%chr(65 + path_idx*2 + eps_idx),
                          horizontalalignment='center',
                          verticalalignment='center',

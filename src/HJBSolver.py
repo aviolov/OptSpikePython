@@ -27,6 +27,8 @@ import time
 label_font_size = 32
 xlabel_font_size = 40
 
+import ext_fb_hjb
+
 class HJBSolver():
     ALPHA_INDEX = 0;
     TAUCHAR_INDEX = 1;
@@ -108,7 +110,6 @@ class HJBSolver():
                alpha_bounds = (-1, 1.),
                 energy_eps = 1.0,
                  visualize=False, save_fig=False):
-        
         mu, tauchar, beta = params[0], params[1], params[2]
         alpha_min, alpha_max = alpha_bounds[0],alpha_bounds[1]
         
@@ -189,7 +190,7 @@ class HJBSolver():
             #Form the right hand side:
             L_prev =  D * di2_x_v_forward + \
                       U * di_x_v_forward + \
-                      energy_eps * alpha*alpha
+                      2*energy_eps * alpha*alpha
 
             #impose the x_min BCs: homogeneous Neumann: and assemble the RHS: 
             RHS = r_[(.0,
@@ -219,7 +220,8 @@ class HJBSolver():
             
             #Store solutions:
             vs[:-1, tk] = v_backward;
-            cs[:, tk+1] = r_[.0, alpha]
+#            cs[:, tk+1] = r_[0.0, alpha]
+            cs[:, tk+1] = r_[ alpha[0], alpha]
                           
             if visualize:
                 mod_steps = 8;
@@ -261,7 +263,8 @@ class HJBSolver():
         #//end time loop
         #Now store the last control:
         v_init = vs[:,0];
-        cs[:, 0] = r_[.0, calc_control( (v_init[2:] - v_init[:-2]) / (2*dx) )]
+        cs[1:, 0] = calc_control( (v_init[2:] - v_init[:-2]) / (2*dx) );
+        cs[0,0] = cs[1,0]
                         
         #Return:
         if visualize:
@@ -278,6 +281,37 @@ class HJBSolver():
                 controls_fig.savefig(file_name)
             
         return  xs, ts, vs, cs
+
+    def c_solve(self, params,
+                alpha_bounds,
+                energy_eps = 1.0):
+        
+        mu, tauchar, beta = params[0], params[1], params[2]
+#        alpha_bounds= (-2,2)
+        alpha_min, alpha_max = alpha_bounds[0], alpha_bounds[1]
+        
+        dx, dt = self._dx, self._dt;
+        xs, ts = self._xs, self._ts;
+        
+        TCs = self._getTCs(xs, alpha_max+mu, tauchar, beta)
+        
+        #WARNING: for some reason giving the raw xs, without calling array on it, caused all kinds of trouble on the C end... (The C driver reads garbage essentiall...)
+        xs = array(xs); 
+        
+        alpha_bounds = array([alpha_min, alpha_max], dtype=float);
+        params = array(params, dtype=float)
+        vs_cs = ext_fb_hjb.solveHJB(params, 
+                                 alpha_bounds,
+                                 energy_eps,
+                                 TCs,
+                                 xs,
+                                 ts)
+        
+        vs= vs_cs[0,:,:];
+        cs = vs_cs[1,:-1,:];
+        return  xs, ts, vs, cs
+        
+        
 
 
 def add_inner_title(ax, title, loc, size=None, **kwargs):
@@ -401,6 +435,88 @@ def visualizeRegimes(regimeParams,
     #Visualize:
     from mpl_toolkits.mplot3d.axes3d import Axes3D,proj3d
     line_width = 3
+    ################################
+    ### CONTROL SURFACES:
+    ####################################
+    fig = figure(figsize = (17, 18))
+    fig.hold(True)
+    subplots_adjust(hspace = .15,wspace = .25,
+                     left=.15, right=.975,
+                     top = .95, bottom = .05)
+  
+    for pidx, params in enumerate(regimeParams):
+        hjbSoln = HJBSolution.load(mu_beta_Tf = params[::2]+[Tf], energy_eps = energy_eps)
+        print 'mu,tc,b = %.2f,%.2f,%.2f'%(hjbSoln._mu,hjbSoln._tau_char, hjbSoln._beta) 
+        ts,xs,vs,cs = hjbSoln._ts, hjbSoln._xs, hjbSoln._vs, hjbSoln._cs
+        xs = xs[1:-1];
+        cs = cs[1:, :]
+        print 'delta t = %.4f, delta x = %.4f'%(ts[2]-ts[1], xs[2]-xs[1])
+        ax = fig.add_subplot(ceil(len(regimeParams)/2), 2, 1+pidx,
+                              projection='3d')
+#    els = [40, 40, 40, 40]
+#    azs = [70, 70, 70,70]
+#        el = els[pidx]; az = azs[pidx];
+        el = 40; az =70;
+        ax.view_init(elev = el, azim= az)
+        X, Y = np.meshgrid(ts, xs)
+        r_stride = int(floor(.1 / (ts[1]-ts[0])))
+        c_stride = int(floor(.1 / (xs[1]-xs[0])))
+        ax.plot_surface(X, Y, cs, 
+                         rstride=r_stride, cstride=c_stride, alpha=.25)
+        yoffset = .2; xoffset = .1; zoffset = 0;
+        tk_mid = where(ts == ts[-1]/2.)[0][0];
+        for tk,slice_color  in zip([0, tk_mid, -1],
+                                   ['b', 'g', 'r']):
+            slice_cs = cs[:, tk];
+            slice_xs = xs;
+            slice_ts = ones_like(slice_cs)*ts[tk];
+            ax.plot(slice_ts, slice_xs, slice_cs,
+                    color = slice_color,
+                    linewidth = 2*line_width)
+        ax.set_xlim((ts[0]-xoffset,ts[-1]+xoffset))
+        ax.set_ylim((xs[0]-yoffset,xs[-1]+yoffset))       
+        ax.set_xlabel('$t$', fontsize = xlabel_font_size); 
+        ax.set_zlabel(r'$\alpha(x,t)$', fontsize = xlabel_font_size);
+#        ax.set_ylabel(r'$x$', fontsize = xlabel_font_size);
+#        yx = [.2,.2,.25,.25]
+        ax.text2D(.125, .2, '$x$',
+            horizontalalignment='center', verticalalignment='center',
+            transform=ax.transAxes,
+            fontsize = xlabel_font_size)
+        
+        ticks = [ts[0], ts[-1]]
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([r'$%.1f$'%tick for tick in ticks])
+        ticks = [.0, xs[-1]]
+        ax.set_yticks(ticks)
+        ax.set_yticklabels([r'$%.1f$'%tick for tick in ticks])
+        max_a = 2.0 #amax(vs)
+        min_a = -2.0 #amax(vs)
+        ticks = [min_a, max_a]
+        ax.set_zticks(ticks)
+        ax.set_zticklabels([r'$%.1f$'%tick for tick in ticks])
+
+        for label in ax.xaxis.get_majorticklabels():
+            label.set_fontsize(label_font_size)
+        for label in ax.yaxis.get_majorticklabels():
+            label.set_fontsize(label_font_size  )
+        for label in ax.zaxis.get_majorticklabels():
+            label.set_fontsize(label_font_size  )
+            
+        t = add_inner_title(ax, '(%s)'%chr(65+pidx), loc=3,
+                            size=dict(size=ABCD_LABEL_SIZE))
+        t.patch.set_ec("none")
+        t.patch.set_alpha(0.5)
+        
+    get_current_fig_manager().window.showMaximized()        
+    if None!= fig_name:
+        lfig_name = os.path.join(FIGS_DIR, fig_name + '_controlsurf.pdf')
+        print 'saving to ', lfig_name
+        savefig(lfig_name, dpi = 300)
+        
+    print 'exiting early!!!'
+    return
+
     ################################
     ### VALUE FUNC SURFACES:
     ####################################
@@ -650,10 +766,12 @@ def compareEffectOfEnergyEps(regimeParams, Tf, values_of_eps = [.001, .1],
         savefig(lfig_name)
         
     
-def timeHJB(tb = [.5, 1.25], Tf = 1.5, energy_eps = .1, alpha_bounds = (-2., 2.), fig_name = None):
+def timeHJB(tb = [.5, 1.25],
+            Tf = 1.5, energy_eps = .1, alpha_bounds = (-2., 2.), fig_name = None):
     import time
     
-    xmin = -1.5; #HJBSolver.calculate_xmin(alpha_bounds, tb, num_std = 1.0)
+#    xmin = -1.5; #HJBSolver.calculate_xmin(alpha_bounds, tb, num_std = 1.0)
+    xmin = -.5;
     dx = HJBSolver.calculate_dx(alpha_bounds, tb, xmin)
     dt = HJBSolver.calculate_dt(alpha_bounds, tb, dx, xmin, factor = 4.)
     
@@ -868,10 +986,148 @@ def investigateIntegrationParams(regimeParams,
         savefig(lfig_name)
             
              
+
+def PyVsCTinyDriver():
+    energy_eps=.1
+    params = array([1.0, .5,   1.314]);
+    S = HJBSolver(.5, .099, .2, -.5)
+
+    print 'const int num_nodes = %d; \
+            const int num_time_slices = %d;'%(len(S._xs),len(S._ts))
     
+    for var_name, arr in zip(['xs', 'ts', 'TCs'],
+                       [S._xs, S._ts, 
+                        S._getTCs(S._xs,
+                                alpha_bounds[1]+params[0],
+                                params[1],
+                                 params[2])]):
+        print_str = 'double %s[%d] = {'%(var_name,len(arr));
+        for v in arr:
+            print_str += '%.3f,'%v 
+        print_str = print_str[:-1]
+        print_str += '};'
+        print print_str
     
+    #the Py solution:
+    xs, ts, py_vs, py_cs =  S.solve(params,
+                               alpha_bounds=alpha_bounds,
+                                energy_eps=energy_eps,
+                                 visualize=False)
+    print 'vs'
+    for tk in xrange(3):
+        print tk, ['%.3f' %py_vs[xk,tk] for  xk in xrange(len(xs))]
+    print 'cs'
+    for tk in xrange(3):
+        print tk, ['%.3f' %py_cs[xk,tk] for  xk in xrange(len(xs)-1)]
+
+def PyVsCDriver(regimeParams, Tf = 1.5, energy_eps=.1, alpha_bounds=(-2,2)):
+    for params in regimeParams:
+        print params
+        xmin = HJBSolver.calculate_xmin(alpha_bounds, params, num_std = 2.0)
+        dx = HJBSolver.calculate_dx(alpha_bounds, params, xmin)
+        dt = HJBSolver.calculate_dt(alpha_bounds, params, dx, xmin)
     
+        #Set up solver
+        S = HJBSolver(dx, dt, Tf, xmin)
+#        #generate parameters into C code::
+#        print 'const int num_nodes = %d; \
+#                const int num_time_slices = %d;'%(len(S._xs),len(S._ts))
+#        
+#        for var_name, arr in zip(['xs', 'ts', 'TCs'],
+#                           [S._xs, S._ts, 
+#                            S._getTCs(S._xs,
+#                                    alpha_bounds[1]+params[0],
+#                                    params[1],
+#                                     params[2])]):
+#            print_str = 'double %s[%d] = {'%(var_name,len(arr));
+#            for v in arr:
+#                print_str += '%.3f,'%v 
+#            print_str = print_str[:-1]
+#            print_str += '};'
+#            print print_str
+#        return
+        #the C solution:
+        c_start = time.clock();
+        print alpha_bounds
+        xs, ts, C_vs, C_cs =  S.c_solve(params,
+                                   alpha_bounds=alpha_bounds,
+                                    energy_eps=energy_eps)
+        c_end = time.clock();
+        (HJBSolution(params, xs, ts,
+                      C_vs, C_cs, energy_eps )).save(file_name = 'PyVsC_C_soln')
+#        print ['%.3f' %C_cs[xk,0] for  xk in xrange(len(xs)-1)]
+#        print ['%.3f' %C_cs[xk,-1] for  xk in xrange(len(xs)-1)]
+        
+        #the Py solution:
+        py_start = time.clock();
+        xs, ts, py_vs, py_cs =  S.solve(params,
+                                   alpha_bounds=alpha_bounds,
+                                    energy_eps=energy_eps,
+                                     visualize=False)
+        py_end  = time.clock();
+        (HJBSolution(params, xs, ts,
+                      py_vs, py_cs, energy_eps )).save(file_name = 'PyVsC_Py_soln')
+#        print '00', ['%.3f' %py_cs[xk,0] for  xk in xrange(len(xs)-1)]
+#        print len(S._ts)-1, ['%.3f' %py_cs[xk,-1] for  xk in xrange(len(xs)-1)]
+        
+        #Analyze:
+        print 'PyVsC L1 Error: '
+        print 'vs error:', amax(abs(py_vs - C_vs))
+        print 'cs error:', amax(abs(py_cs - C_cs))
+        print 'times: C=%.3f, Py=%.3f secs'%(c_end-c_start,
+                                             py_end-py_start)
     
+    print 'PyVsC Complete - check results'
+    
+def SingleSolutionForAllT(params, Tf_long = 3.,
+                           Tf_short = 1., energy_eps=.1, 
+                           resimulate=False):
+        xmin = HJBSolver.calculate_xmin(alpha_bounds, params, num_std = 2.0)
+        dx = HJBSolver.calculate_dx(alpha_bounds, params, xmin)
+        dt = HJBSolver.calculate_dt(alpha_bounds, params, dx, xmin)
+    
+        if resimulate:
+        #Set up solver
+            S = HJBSolver(dx, dt, Tf_long, xmin)
+    
+            #the C solution:
+            
+            long_xs, long_ts, long_vs, long_cs =  S.c_solve(params,
+                                       alpha_bounds=alpha_bounds,
+                                        energy_eps=energy_eps)
+            
+            (HJBSolution(params, long_xs, long_ts,
+                          long_vs, long_cs , energy_eps )).save(file_name = 'SingleSoln_long_T=%.1f'%Tf_long)
+    
+            #Set up solver
+            S = HJBSolver(dx, dt, Tf_short, xmin)
+    
+            #the C solution:
+            
+            short_xs, short_ts, short_vs, short_cs =  S.c_solve(params,
+                                       alpha_bounds=alpha_bounds,
+                                        energy_eps=energy_eps)
+            
+            (HJBSolution(params, short_xs, short_ts,
+                          short_vs, short_cs , energy_eps )).save(file_name = 'SingleSoln_short_T=%.1f'%Tf_short)
+            
+        longSoln  = HJBSolution.load(file_name = 'SingleSoln_long_T=%.1f'%Tf_long)
+        shortSoln = HJBSolution.load(file_name = 'SingleSoln_short_T=%.1f'%Tf_short)
+        
+        long_ts = longSoln._ts;
+        
+        indxs = where(long_ts>=Tf_long-Tf_short)
+        long_cropped_vs = squeeze(longSoln._vs[:, indxs]);
+#        long_cropped_vs = longSoln._vs[:, 644:];
+        short_vs = shortSoln._vs
+        
+        #Analyze:
+        print 'LongVsShort L1 Error: '
+        print 'ts error:', amax(abs(long_ts[indxs] - shortSoln._ts-2.))
+        print 'vs error:', amax(abs(long_cropped_vs - short_vs))
+        print 'vs relative error:', amax(abs(long_cropped_vs - short_vs) / (short_vs+1e-8))
+            
+
 if __name__ == '__main__':
     from pylab import *
     
@@ -897,7 +1153,7 @@ if __name__ == '__main__':
 #    highEpsParams  = [mu_low/tau_char, tau_char, beta_high];
     
 #    solveRegimes(regimeParams, Tf, energy_eps=.001)
-    visualizeRegimes(regimeParams[0:], Tf, 
+    visualizeRegimes(regimeParams[:], Tf, 
                     fig_name='Regimes')
 
 #    solveRegimes(regimeParams, Tf, energy_eps=.1)
@@ -921,6 +1177,20 @@ if __name__ == '__main__':
 #    investigateIntegrationParams(regimeParams[0:],
 #                                 regimeTitles=regimeTitles,
 #                                 integrate_new = False)
+    
 
+#C driver;
+#    PyVsCTinyDriver()
+#    PyVsCDriver([[0.20000000000000001, 0.5, 1.5]],
+#                 Tf = 3.0,
+#                 energy_eps = .1,
+#                 alpha_bounds = alpha_bounds);
+#    PyVsCDriver(regimeParams, Tf = 1.5);
+
+
+#    SingleSolutionForAllT(regimeParams[2],
+#                          resimulate= False)
+
+    
     show()
     

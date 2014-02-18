@@ -1808,6 +1808,80 @@ def compareEffectOfEnergyEps(regimeParams, Tf, values_of_eps = [.001, .1],
         print 'saving to ', lfig_name
         savefig(lfig_name)
     
+def compareEffectOfEnergyEpsJoined(regimeParams, Tf, values_of_eps = [.001, .1],
+                             alpha_bounds = [-2., 2.],
+                             fig_name = None):
+    '''This is the same as compareEffectOfEnergyEps, except that it plots them 
+    both on the same graph (ref reply)'''
+
+    c_min ,c_max = -2., 2
+    ####CONTROLS SNAPSHOTS:
+    cuts_fig = figure(figsize = (17, 20))
+    subplots_adjust(hspace = .2, wspace = .4,
+                     left=.15, right=.975,
+                     top = .95, bottom = .05)
+  
+    N_regimes = len(regimeParams)
+    N_eps = len(values_of_eps)
+    for pidx, params in enumerate(regimeParams):
+        for eidx, energy_eps in enumerate(values_of_eps):
+            fbkSoln = FBKSolution.load(mu_beta_Tf = params[::2]+[Tf],
+                                       energy_eps = energy_eps)
+            print 'mu,tc,b = %.2f,%.2f,%.2f'%(fbkSoln._mu,fbkSoln._tau_char, fbkSoln._beta) 
+            print 'Tf, energy_eps   = %.3f,%.3f '%(fbkSoln._ts[-1],
+                                                   fbkSoln._energy_eps)
+            ts,xs,cs = fbkSoln._ts, fbkSoln._xs, fbkSoln._cs_iterates[-1]
+            ax = cuts_fig.add_subplot(N_regimes, 1,1 + pidx)
+            ax.hold(True)
+            
+            if  0 == pidx:
+                ax.set_title(r'Effect of $\epsilon$',
+                         fontsize = xlabel_font_size)
+            ax.plot(ts, cs, linewidth = 3, label=r'$\epsilon=%.3f$'%energy_eps)
+            if N_regimes -1  == pidx:
+                ax.set_xlabel('$t$', fontsize = xlabel_font_size);
+            ax.set_ylabel(r'$\alpha(t)$', fontsize = xlabel_font_size);
+        
+            axc = ax
+            axc.hlines(0, ts[0], ts[-1], linestyles='--')
+        
+            axc.set_xlim(ts[0], ts[-1])
+            ax.set_ylim(alpha_bounds[0]-.2,
+                        alpha_bounds[1]+.2);
+#            axc.set_ylim(c_min ,c_max)
+            ticks = [ts[-1] /3. , 2.*ts[-1] /3. ,ts[-1] ]
+            axc.set_xticks(ticks)
+            ticks = [c_min, .0, c_max]
+            axc.set_yticks(ticks)
+            axc.set_yticklabels(('$%.1f$'%alpha_bounds[0], '$0$','$%.1f$'%alpha_bounds[1]),
+                                 fontsize = label_font_size)
+            axc.set_xticks((.5, 1.0, 1.5))
+            axc.set_xticklabels(('$.5$', '$1$','$1.5$'), fontsize = label_font_size)
+            
+            inner_tag ='(%s)'%chr(65+pidx)
+            axc.text(-.1, 1.0, inner_tag,
+                horizontalalignment='center',
+                verticalalignment='center',
+                transform=ax.transAxes,
+                fontsize = ABCD_LABEL_SIZE)
+            if 3 == pidx:
+                ax.legend(loc='lower right',
+                      prop={'size':label_font_size})
+                
+#            for ticklabels in [axc.xaxis.get_majorticklabels(),
+#                               axc.yaxis.get_majorticklabels()]:
+#                for label in ticklabels:
+#                    label.set_fontsize(label_font_size )
+                    
+#            t = add_inner_title(ax, chr(65+pidx*N_eps + eidx), loc=3,
+#                                size=dict(size=ABCD_LABEL_SIZE))
+#            t.patch.set_ec("none"); t.patch.set_alpha(0.5)
+    
+    get_current_fig_manager().window.showMaximized()        
+    if None != fig_name:
+        lfig_name = os.path.join(FIGS_DIR, fig_name + '_eps_comparison_joined.pdf')
+        print 'saving to ', lfig_name
+        savefig(lfig_name)
 def crossCompare(regimeParams, regimeTitles,  Tf):
     for opt_params in regimeParams:
         fbkSoln = FBKSolution.load(mu_beta_Tf = opt_params[::2]+[Tf])
@@ -2067,6 +2141,9 @@ def algosHarness(params,
 #    print 'saving to ', file_name
 #    savefig(file_name)
 
+def PyVsCDriver(regimeParams):
+    pass
+
 if __name__ == '__main__':
     from pylab import *
     Tf = 1.5; 
@@ -2090,7 +2167,8 @@ if __name__ == '__main__':
                       (mu_high/tau_char, beta_high):'SuperT, high-noise', 
                      (mu_low/tau_char, beta_low)  :'SubT, low-noise', 
                      (mu_low/tau_char, beta_high) :'SubT, high-noise'}
-    
+        
+#    PyVsCDriver(regimeParams)
 #    solveRegimes(regimeParams[0:],
 #                  Tf, energy_eps = .001)
 
@@ -2132,6 +2210,10 @@ if __name__ == '__main__':
 #                             Tf,
 #                             values_of_eps = [.001, .1],
 #                             fig_name = 'Regimes')
+    compareEffectOfEnergyEpsJoined(regimeParams, 
+                                   Tf,
+                                   values_of_eps = [.001, .1],
+                                   fig_name = 'Regimes')
 
 
 ###########################

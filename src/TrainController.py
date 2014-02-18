@@ -39,6 +39,12 @@ from collections import deque
 label_font_size = 24
 xlabel_font_size = 32
 ########################
+##GLOBAL PARMAETERS:#######################
+mu_high = 1.5;    mu_low = .1; mu_crit = 1.;
+tau_char = .5;
+beta_high = 1.5;  beta_low = .3;
+###########################################
+
 class SpikeTrain():
     FILE_EXT = '.spt'
     def __init__(self, spike_times):
@@ -182,7 +188,8 @@ def visualizeTargetTrain(file_tag = None, N_spikes = 20, mean_ISI = 1.5,
         lfig_name = os.path.join(FIGS_DIR, 'target_train_%s.pdf'%save_fig_name)
         print 'saving to ', lfig_name
         savefig(lfig_name, dpi = 300)
-        
+      
+  
 class TargetTrainSimulator():
     def __init__(self, params, Tf, alpha_bounds,
                  target_spikes,
@@ -284,10 +291,9 @@ def getFeedbackControl(params, Tf,
         S = HJBSolver(dx, dt, Tf, xmin)
         
         #the v solution:
-        xs, ts, vs, cs =  S.solve(params,
+        xs, ts, vs, cs =  S.c_solve(params,
                                    alpha_bounds=alpha_bounds,
-                                    energy_eps=energy_eps,
-                                     visualize=False)
+                                    energy_eps=energy_eps)
         closedloop_xs = xs;
         closedloop_ts = ts;
         closedloop_cs = cs;
@@ -303,14 +309,15 @@ def getFeedbackControl(params, Tf,
                 raise RuntimeError('Received x = %f > v_thresh = %f - ERROR: Controller should not be asked for what to do for values higher than the threshold!!!'%(x, closedloop_xs[-1]))
             else:
                 return stochasticInterpolator(x,t)[0][0]
-        print Tf, dt
+#        print Tf, dt
         return feedback_alpha;
 
 
 def runSingleTarget(params, Tf,
                     control_generator,
-                    dt = 1e-3, x_thresh=1.0):
-    #Hit a single target:  
+                    dt = 1e-3, x_thresh=1.0,
+                    save_trajectories = False):
+    '''Hit a single target:'''  
 
     #get Control: 
     control_func = control_generator(params, Tf)
@@ -320,28 +327,48 @@ def runSingleTarget(params, Tf,
     #THE MAIN INTEGRATION LOOP:    
     t = .0;
     x = .0;
+    xs, cs = None, None
+    if save_trajectories:
+        xs, cs =[],[]; 
+    
+    k = 0
+    start =  time.clock();
     while True:
         xi = randn()
         #Increment each path using the SAME RANDN:
         alpha = control_func(t, x)
+        if save_trajectories:
+            xs.append(x);
+            cs.append(alpha);
         dX = (mu + alpha - x / tauchar)*dt + beta * xi *sqrt_dt #compute_dX(alpha, x_prev, xi)
 
         t += dt;
-        x += dX
+        x += dX;
+        k+=1
                 
         if x >= x_thresh:
-            return t
+            end =  time.clock();
+            print 'spike_iterates = %d, ISI_compute_time = %.2f'%(k,
+                                                                  end-start)
+            if save_trajectories:
+                return t, xs, cs
+            else:
+                return t    
 
 def runSinlgeTargetTrain(spikes, 
                          params,
                          control_generator,
                          dt = 1e-3, x_thresh=1.0,
-                         skip_missed = False):
+                         skip_missed = False,
+                         save_trajectories=False):
 
-    
-    last_spike = .0
     achievedTrain = []
     
+    ts, xs, cs = None, None, None;
+    if save_trajectories:
+        ts, xs ,cs =  array([]), array([]),array([]);
+    
+    last_spike = .0
     for spike in spikes:
         #Calculate target:
         T_target = spike - last_spike
@@ -353,11 +380,25 @@ def runSinlgeTargetTrain(spikes,
             continue
             
         #generate next ISI
-        currentISI = runSingleTarget(params, 
+        currentISI = None;
+        if save_trajectories:
+            currentISI, current_xs,\
+                 current_cs = runSingleTarget(params, 
+                                     T_target,
+                                     control_generator,
+                                     dt = dt,
+                                     save_trajectories=save_trajectories)
+            ts = r_[ts, linspace(last_spike,
+                                 last_spike+currentISI-dt,len(current_xs))]
+            xs = r_[xs, current_xs]
+            cs = r_[cs, current_cs]
+        else:
+            currentISI = runSingleTarget(params, 
                                      T_target,
                                      control_generator,
                                      dt = dt)
         #convert to global time:
+        
         last_spike = last_spike + currentISI
          
         #store:
@@ -365,7 +406,11 @@ def runSinlgeTargetTrain(spikes,
     
 #    print spikes
 #    print achievedTrain
-    return achievedTrain
+    if save_trajectories:
+        return achievedTrain, ts, xs, cs;
+    else:
+        return achievedTrain
+        
 
 def TargetTrainDriver(params,
                       target_train_tag,
@@ -436,7 +481,7 @@ def windowSmoothTargetTrain(TargetTrain,
         smooth_window += exp(- (local_ts *local_ts) / (2.* sigma_squared)) / sqrt( 2.*pi * sigma_squared)
 
     return ts, smooth_window
- 
+
 def visualizeTrackingTrains(params,   
                           target_train_tag,                       
                           N_samples = 1,
@@ -528,8 +573,57 @@ def visualizeTrackingTrains(params,
         lfig_name = os.path.join(FIGS_DIR, tag + '_trains_sim_%d.pdf'%N_samples)
         print 'saving to ', lfig_name
         savefig(lfig_name, dpi = 300)
-        
-        
+
+
+def ComputeTargetDeviation(params,   
+                              target_train_tag,
+                              generated_trains_tag,
+                              N_spikes = 3,
+                              N_samples = 1,
+                              T_reference = None,
+                              correctness_ratio= 0.1):
+    #the target train:
+    target_file_name = 'target_%s'%(target_train_tag)   
+    ST = SpikeTrain.load(target_file_name)
+    target_spike_times = array(ST._spike_times);
+    N_spikes = len(target_spike_times);
+    
+    #the tracking trains:
+    file_name = 'TargetTrainList_%d_%d_%s'%(N_spikes, N_samples, generated_trains_tag)
+    print 'loading tracking trains ', file_name
+    file_name = os.path.join(RESULTS_DIR, file_name + '.lst')
+    import cPickle
+    load_file = open(file_name, 'r')
+    TrackingTrainsList = cPickle.load(load_file)        
+    load_file.close()
+    N_samples = len(TrackingTrainsList)
+    
+    #now analyze:
+    if T_reference == None:
+        T_reference = mean(diff(target_spike_times));
+    print 'T_reference set to ', T_reference
+    
+    number_correct = 0
+    abs_jitter     = 0.0;
+    squared_jitter = 0.0
+    for lk in xrange(N_samples):
+        error = abs(target_spike_times - array(TrackingTrainsList[lk]))
+        number_correct += len(error[error<correctness_ratio*T_reference])
+        abs_jitter += sum(error);
+        squared_jitter += sum(error*error)
+    
+    percent_correct = number_correct / (N_samples*N_spikes) * 100.0
+    
+    mean_abs_jitter = abs_jitter /  (N_samples*N_spikes)
+    
+    mean_squared_jitter = squared_jitter /   (N_samples*N_spikes)
+    
+#    for metric, tag in zip([percent_correct, mean_abs_jitter, mean_squared_jitter],
+#                           [r'% correct', 'abs_jitter', 'sq_jitter']):
+#        print '%s = %.3f'%(tag, metric)
+    return percent_correct, mean_abs_jitter, mean_squared_jitter
+    
+    
 def analyzeGeneratedTrains(params):
     import cPickle
 
@@ -607,8 +701,7 @@ def analyzeTargetTrains():
     print 'FASTEST inhibited SuperT = %.2f'%getDeterministic(mu_high/tau_char + alphas[1],
                                                        tau_char)
     
-
-#    for params in regimeParams:
+    #    for params in regimeParams:
 #        mu_base, tau_char,beta= params[:];
 #        time_to_reach = empty(2)
 #        for idx, mu in enumerate([mu_base + alphas[0], mu_base+alphas[1]]):
@@ -616,60 +709,42 @@ def analyzeTargetTrains():
 #            
 #            if mu < 1.0:
 #                means[idx] = Infinity
-#            
-#            
 #        print 'nonoise_inhibited: %.2f'%means[0],\
 #              'nonoise_excitory: %.2f'%means[1]
-                        
+
+def GenerateHarness(generate_new=False, N_generated = 9):
+    regimeParams = [ [mu_high/tau_char, tau_char, beta_low],
+                 [mu_high/tau_char, tau_char, beta_high],
+                 [mu_low/tau_char, tau_char, beta_low],  
+                 [mu_low/tau_char, tau_char, beta_high]  ]
+    regimes = dict(zip(['suptln', 'supthn', 'subtln','subthn'],
+                            regimeParams))
+    
+#    regimes = {k: regimes[k] for k in ('supthn','subthn')} #python 2.7 only
+    regimes = dict([(i, regimes[i]) for i in ['subthn'] if i in regimes])
+#    regimes = dict([(i, regimes[i]) for i in ['supthn'] if i in regimes])
+    
+    for regime_tag, target_params in regimes.iteritems():
+#        for gen_idx in xrange(N_generated):
+#        for gen_idx in [6]:
+            target_regime = '%s_%d'%(regime_tag,gen_idx)
+            if generate_new:
+                generateTargetTrainFromModel(target_params,
+                                      N_spikes,
+                                      path_tag=target_regime)
+            file_tag= '%s_%d'%(target_regime,N_spikes)
+            target_train_tag = '%s_%d'%(target_regime, N_spikes)
+            visualizeTargetTrain(file_tag= file_tag)
+            
+    ###Chosen paths =
+    'supthn_8'
+    'subthn_6'
         
-    
-    
-    
-    
-########################
-if __name__ == '__main__':
-    from pylab import *
-    
-    
-    mu_high = 1.5;    mu_low = .1; mu_crit = 1.;
-    tau_char = .5;
-    beta_high = 1.5;  beta_low = .3;
-#    regimeParams = [ [mu_crit/tau_char, tau_char, beta_low],
-#                     [mu_crit/tau_char, tau_char, beta_high] 
-#                   ]
-    regimeParams = [ [mu_high/tau_char, tau_char, beta_low],
-                     [mu_high/tau_char, tau_char, beta_high] 
-                   ]
-#    regimeParams = [ [mu_low/tau_char, tau_char, beta_low],
-#                     [mu_low/tau_char, tau_char, beta_high] 
-#                   ]
-    regimeParams = [ [mu_high/tau_char, tau_char, beta_low],
-                     [mu_high/tau_char, tau_char, beta_high],
-                     [mu_low/tau_char, tau_char, beta_low],  
-                     [mu_low/tau_char, tau_char, beta_high]  ]
 
-    N_spikes  = 16; #17  #3,4,20
-    N_samples = 50;
-
-###### ### ### ### ### ##### 
-### GENERATE TARGET:
-###### ### ### ### ### ###### 
-#    target_params = [mu_high/tau_char, tau_char, beta_high]
-#    for gen_idx in arange(32):
-#        target_regime = 'supthn_%d'%gen_idx
-##        generateTargetTrainFromModel(target_params,
-##                                  N_spikes,
-##                                  path_tag=target_regime)
-#        file_tag= '%s_%d'%(target_regime,N_spikes)
-#        visualizeTargetTrain(file_tag= file_tag)
+#    analyzeTargetTrains()
 
     
-    target_regime ='supthn_8' #'crit' #'suptln' # 'supthn' #'crit' #'suptln' #'crit' #'subthn'
-#    target_train_tag = '%s_%d'%(target_regime, N_spikes)
-#    visualizeTargetTrain(file_tag= target_train_tag)
-    
-#        analyzeTargetTrains()
-#
+def SimulateHarness():
 # SIMULATE:  
     from multiprocessing import Process
     procs = [];
@@ -680,8 +755,11 @@ if __name__ == '__main__':
 #        for control_tag, c_function in zip(['cl', 'ol'],
 #                                       [getFeedbackControl,
 #                                        getOpenloopControl ]):
-        for control_tag, c_function in zip(['ol'],
-                                       [getOpenloopControl]):
+#        for control_tag, c_function in zip(['ol'],
+#                                       [getOpenloopControl]):
+        for control_tag, c_function in zip(['cl'],
+                                       [getFeedbackControl]):
+        
 
                 tag = param_tag + '_' + control_tag
                 file_tag = '%s_%d'%(target_regime, N_spikes)
@@ -705,130 +783,439 @@ if __name__ == '__main__':
     for proc in procs:
         proc.join()
 
+def AnalyzeHarness():
+    for params, param_tag in zip(regimeParams[:2],
+                                 ['SUPT_ln', 'SUPT_HN']):
+        control_tag = 'cl'
+        generated_trains_tag = param_tag + '_' + control_tag
+        #compute percentage correct:
+        target_train_tag = '%s_%d'%(target_regime, N_spikes)
+        ComputeTargetDeviation(params,
+                              target_train_tag=target_train_tag,
+                              generated_trains_tag = generated_trains_tag,
+                              N_spikes=N_spikes,
+                              N_samples = N_samples)
+
+
+def IncreasedPowerBandsHarness():
+    pass
+#############################
+####Increased Power Bounds:
+############################
+##    params = regimeParams[1]
+##    param_tag = 'SUPT_HN'
+##    control_tag = 'cl'
+###    
+##    c_function = lambda params, Tf: getFeedbackControl(params, Tf,
+##                                                       alpha_bounds = (-4,4))
+##    tag = param_tag + '_' + control_tag + '_' +'aplus'
+##    target_train_tag = '%s_%d'%(target_regime, N_spikes)
+#    #Simulate:
+##    TargetTrainDriver(params,
+##                      target_train_tag=target_train_tag,
+##                      N_samples = N_samples,
+##                      N_spikes = N_spikes,
+##                      control_generator = c_function,
+##                      tag = tag,                      
+##                      dt = 1e-3)
+##    visualizeTrackingTrains(params,
+##                          target_train_tag=target_train_tag,
+##                          N_spikes=N_spikes,
+##                          N_samples = N_samples,                         
+##                          N_plot_samples=amin([N_samples,10]),
+##                          tag = tag,
+##                          save_fig = True,
+##                          t_max=11.)
+#
+#
+#
+##    skip_missed = False;
+##    file_tag = 'Ahmadian'
+##    generateAhmadianTrain(file_tag)
+##    visualizeTargetTrain('Ahmadian',
+##                         save_fig_name='Ahmadian')
+###    generateTargetTrain(N_spikes)
+##    visualizeTargetTrain(file_tag='model_%d'%N_spikes)
+#    
+##    params = regimeParams[0]; tag = 'SUBTHN_cl_skip'
+##    TargetTrainDriver(params,
+##                              N_samples = N_samples,
+##                              N_spikes = N_spikes,
+##                              control_generator = getFeedbackControl,
+##                              tag = tag,
+##                              dt = 1e-4,
+##                              skip_missed=True)
+##    visualizeTrackingTrains(params,
+##                          N_spikes=N_spikes,
+##                           tag = tag,
+##                           save_fig=True)
+#
+##    for params, param_tag in zip(regimeParams,
+##                                 ['CRITLN', 'CRITHN']):
+##        for control_tag, c_function in zip(['cl', 'ol'],
+##                                       [getFeedbackControl,
+##                                        getOpenloopControl ]):
+##                tag = param_tag + '_' + control_tag
+##                
+##                #Simulate:
+##        #        TargetTrainDriver(params,
+##        #                          target_train_tag=file_tag,
+##        #                          N_samples = N_samples,
+##        #                          N_spikes = N_spikes,
+##        #                          control_generator = c_function,
+##        #                          tag = tag,
+##        #                          dt = 1e-3)
+##                
+##                #Visualize:    
+##                visualizeTrackingTrains(params,                         
+##                                      N_spikes=N_spikes,
+##                                      tag = tag,
+##                                      save_fig = True)
+#
+#
+##    params = regimeParams[0];
+###    param_tag = 'SUPERTLN_Ahmadian' #'CRITLN_Ahmadian'    
+##    for control_tag, c_function in zip(['cl', 'ol'],
+##                               [getFeedbackControl,
+##                                getOpenloopControl ]):
+##        
+##        #How to treat missed targets?
+##        tag = param_tag + '_' + control_tag
+##        if skip_missed:
+##            tag += '_skip' 
+##        
+##        #Simulate:
+###        TargetTrainDriver(params,
+###                          target_train_tag=file_tag,
+###                          N_samples = N_samples,
+###                          N_spikes = N_spikes,
+###                          control_generator = c_function,
+###                          tag = tag,
+###                          dt = 1e-3)
+##        
+##        #Visualize:    
+##        visualizeTrackingTrains(params,    
+##                              target_train_tag=file_tag,                         
+##                              N_spikes=N_spikes,
+##                              tag = tag,
+##                              save_fig = True)
+
+
+#    TODO: Move Simulate, Visualize and Analyze into a single routine with a resiulate flag t
+
+from ControlGenerator import CLControlGenerator, ControlGenerator
+def NewCLControllerHarness():
+    target_train_tag = 'supthn_8_16' 
+    file_name = 'target_%s'%(target_train_tag)   
+    ST = SpikeTrain.load(file_name)
+    spikes = ST._spike_times;
+    ISIs = r_[spikes[0], diff(spikes)]
+    
+    params = [mu_low/tau_char, tau_char, beta_high];
+    
+    old_time = .0
+    new_time = .0
+    newGenerator = CLControlGenerator(params,
+                                      alpha_bounds=(-2, 2), energy_eps=.001, max_Tf=2*amax(ISIs))
+    new_time +=time.clock();
+    
+    for k in xrange(1):
+    
+        common_seed = randint(10000000)
+        
+        old_start = time.clock();
+        seed(common_seed)
+        sampleTrain_old =  runSinlgeTargetTrain(spikes,
+                                           params,
+                                           control_generator = getFeedbackControl)
+        old_end = time.clock()
+        
+        seed(common_seed)
+        sampleTrain_new = runSinlgeTargetTrain(spikes,
+                                           params,
+                                           control_generator = newGenerator)
+        new_end = time.clock()
+    
+        #Analyze
+#        print sampleTrain_old
+#        print sampleTrain_new
+        
+        print 'error = ', amax(abs(array(sampleTrain_old) - array(sampleTrain_new)))
+        old_time += old_end - old_start;
+        new_time += new_end - old_end;
+    
+    print 'new vs. old time, (ratio):',    new_time,    old_time, new_time/old_time
+def TimerHarness():
+    
+    target_train_tag = 'supthn_8_16' 
+    file_name = 'target_%s'%(target_train_tag)   
+    ST = SpikeTrain.load(file_name)
+    spikes = ST._spike_times;
+    ISIs = r_[spikes[0], diff(spikes)]
+    
+    params = [mu_low/tau_char, tau_char, beta_high];
+    
+    start = time.clock()
+    newGenerator = CLControlGenerator(params,
+                                      alpha_bounds=(-2, 2), energy_eps=.001, max_Tf=2*amax(ISIs))
+    mid = time.clock()
+    print 'Control Compute time = :',    mid-start;
+    sampleTrain_new = runSinlgeTargetTrain(spikes,
+                                       params,
+                                       control_generator = newGenerator)
+    end = time.clock()
+
+    print 'Simulate time = :',    end-mid
+#TIME IT:
+def ProfileHarness():
+    import cProfile, pstats, StringIO
+    pr = cProfile.Profile()
+    pr.enable()
+    # ... do something ...
+    TimerHarness()
+    pr.disable()
+    s = StringIO.StringIO()
+    sortby = 'cumulative'
+    ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+    ps.print_stats()
+    print s.getvalue()
+        
+
+def NoiseRangeStudy(resimulate = False):
+    N_spikes = 16;
+    N_samples = 50;
+    
+    target_train_tags = ['%s_%d'%(t, N_spikes) for t in ['supthn_8',
+                                                         'subthn_6']]
+    
+    for target_train_tag in target_train_tags:
+#    target_train_tag = 'supthn_8_%d'%N_spikes 
+        target_train_file_name = 'target_%s'%(target_train_tag)   
+        ST = SpikeTrain.load(target_train_file_name)
+        spikes = ST._spike_times;
+        ISIs = r_[spikes[0], diff(spikes)]
+            
+        bs = arange(.2, 1.8, .2)
+        ms = [mu_high, 
+              mu_low]
+        regime_tags = {mu_high:'SUPT',
+                       mu_low:'subt'}
+        for midx, m in enumerate(ms):
+            figure(figsize=(17,5))
+            subplots_adjust(left=.05, right=.975,
+                            top = .9, bottom = .2,
+                            wspace = .3)
+            
+            stats = [];
+            for bidx, b in enumerate(bs):
+                simulated_train_tag = '%s_m=%.1f_b=%.1f_cl'%(target_train_tag,
+                                                              m/tau_char, b)
+                params = [m/tau_char, tau_char, b];
+                
+                if resimulate:
+                    fbcGenerator = CLControlGenerator(params,
+                                                  alpha_bounds=(-2, 2),
+                                                   energy_eps=.001,
+                                                    max_Tf=4*amax(ISIs))
+                    TargetTrainDriver(params=params,
+                                       target_train_tag=target_train_tag,
+                                        N_samples=N_samples,
+                                         N_spikes=N_spikes, 
+                                         control_generator=fbcGenerator,
+                                          tag=simulated_train_tag)
+                
+                #Load Data:
+                percent_correct, mean_abs_jitter, mean_squared_jitter =\
+                     ComputeTargetDeviation(params,   
+                                  target_train_tag,
+                                  generated_trains_tag=simulated_train_tag,
+                                  N_spikes = N_spikes,
+                                  N_samples = N_samples) 
+                stats.append([percent_correct, 
+                              mean_abs_jitter, 
+                              mean_squared_jitter])
+    #            print m, b,  percent_correct, mean_abs_jitter, mean_squared_jitter
+    
+            #Visualize
+            stats = array(stats)
+            for sidx, (stat_title,
+                       y_label) in enumerate(zip(['Percent Correct',
+                                                   'Mean Abs. Deviation',
+                                                   'Mean Squared Deviation'],
+                                                  ['%', '$|T-t_{sp}|$' , r'$(T-t_{sp})^2$'])):
+#                subplot(1, 3, 1+ *3 + sidx)
+                subplot(1, 3, 1+sidx)
+                plot(bs, stats[:,sidx], '-+')
+                xlabel(r'$\beta$', fontsize= xlabel_font_size)
+                ylabel(y_label, fontsize= xlabel_font_size)
+                title(stat_title, fontsize = xlabel_font_size-4)
+                y_min, y_max = ylim(); 
+                if 0 == sidx:
+                    y_max = 100.0;
+                ylim((.0, y_max));
+                xlim((bs[0], bs[-1]))
+            fig_file_name = os.path.join(FIGS_DIR,
+                                         'ControlError_Stats_cl_%s_%s'%(target_train_tag,
+                                                                        regime_tags[m]))
+            print 'saving to figure to ', fig_file_name
+            savefig(fig_file_name);
+            #//for driving regime
+        #//for target regime
+
+def SingleTrainStudy(resimulate = False):
+    import cPickle
+    N_spikes = 16;
+    
+    target_train_tags = ['%s_%d'%(t, N_spikes) for t in ['supthn_8',
+                                                         'subthn_6']]
+    target_train_tag = '%s_%d'%('supthn_8', N_spikes);
+#    target_train_tag = 'supthn_8_%d'%N_spikes 
+    target_train_file_name = 'target_%s'%(target_train_tag)   
+    ST = SpikeTrain.load(target_train_file_name)
+    target_spikes = ST._spike_times;
+    ISIs = r_[target_spikes[0], diff(target_spikes)]
+    
+    params = [mu_high/tau_char, tau_char, beta_low];
+    regime_tag = 'SUPT';
+    control_tags = ['ol', 'cl']
+#        simulated_train_tag = '%s_m=%.1f_b=%.1f_cl'%(target_train_tag,
+#                                                     m/tau_char, b)
+    alpha_bounds = (-2, 2)
+    fbcGenerator = CLControlGenerator(params,
+                                      alpha_bounds=alpha_bounds,
+                                       energy_eps=.001,
+                                        max_Tf=4*amax(ISIs))
+    
+    control_generators = [getOpenloopControl, fbcGenerator]
+    for control_generator, control_tag in zip(control_generators[:],
+                                              control_tags[:]):
+           
+        save_file_name = 'single_tracker_%s_%s.tt'%(regime_tag,
+                                                 control_tag);
+        save_file_name = os.path.join(RESULTS_DIR,
+                                      save_file_name);
+        if resimulate:
+            tracking_spikes, ts, xs, cs = runSinlgeTargetTrain(target_spikes,
+                                               params,
+                                               control_generator = control_generator,                                       
+                                               save_trajectories=True)
+            
+            dataDict = {'track_spikes': tracking_spikes,
+                        'ts': ts,
+                        'xs': xs,
+                        'cs': cs}
+            
+            print 'saving to ', save_file_name
+            dump_file = open(save_file_name, 'wb')
+            cPickle.dump(dataDict, dump_file, 1) # 1: bin storage
+            dump_file.close()
+        
+        load_file = open(save_file_name, 'r')
+        dataDict = cPickle.load(load_file);
+        tracking_spikes, ts, xs, cs = dataDict['track_spikes'],\
+                                    dataDict['ts'],\
+                                    dataDict['xs'],\
+                                    dataDict['cs']
+        
+        ###############################
+        #VISUALIZE:
+        ###############################
+        figure(figsize = (17,8))
+        subplots_adjust(left=.15,   right=.975,
+                        top = .9,   bottom = .1,
+                        wspace = .3, hspace =.2)
+
+        axX = subplot(211)
+        plot(ts,xs);
+        plot(target_spikes, 1.35*ones_like(target_spikes),'bo')
+        vlines(tracking_spikes, .0, 1.25, 'r')
+        ylabel(r'$X_t$', fontsize = xlabel_font_size)
+        
+        axA = subplot(212)
+        plot(ts, cs);
+        vlines(tracking_spikes, .0, 2.25, 'r')
+        ylim((-2.25, 2.25))
+        ylabel(r'$\alpha(X_t, t)$', fontsize = xlabel_font_size)
+        xlabel(r'$t$', fontsize = xlabel_font_size)
+        
+        axA.set_yticks((alpha_bounds[0], .0, alpha_bounds[1]))
+        axA.set_yticklabels(('$%d$'%alpha_bounds[0],
+                             '$0$',
+                             '$%d$'%alpha_bounds[1]),  fontsize = label_font_size)
+        axX.set_yticks((.0, 1.))
+        axX.set_yticklabels(('$0$', '$1$'), 
+                            fontsize = label_font_size)
+        t_ticks = [.0, 5., 10.]
+        for ax in [axX, axA]:
+            ax.set_xticks(t_ticks)
+            ax.set_xticklabels(['$%.1f$'%t for t in t_ticks], 
+                            fontsize = label_font_size)
+            ax.set_xlim((.0, ts[-1]+.1))
+        fig_file_name = os.path.join(FIGS_DIR,
+                                         'SingleTrain_Trajectories_%s_%s_%s.pdf'%(regime_tag,
+                                                                              target_train_tag,
+                                                                              control_tag))
+        print 'saving to figure to ', fig_file_name
+        savefig(fig_file_name);
+              
+             
+if __name__ == '__main__':
+    from pylab import *   
+#    regimeParams = [ [mu_crit/tau_char, tau_char, beta_low],
+#                     [mu_crit/tau_char, tau_char, beta_high] 
+#                   ]
+    regimeParams = [ [mu_high/tau_char, tau_char, beta_low],
+                     [mu_high/tau_char, tau_char, beta_high] 
+                   ]
+#    regimeParams = [ [mu_low/tau_char, tau_char, beta_low],
+#                     [mu_low/tau_char, tau_char, beta_high] 
+#                   ]
+    regimeParams = [ [mu_high/tau_char, tau_char, beta_low],
+                     [mu_high/tau_char, tau_char, beta_high],
+                     [mu_low/tau_char, tau_char, beta_low],  
+                     [mu_low/tau_char, tau_char, beta_high]  ]
+
+    N_spikes  = 16; #17  #3,4,20
+    N_samples = 50;
+
+##### ### ### ### ### ##### 
+## GENERATE TARGET:
+##### ### ### ### ### #####
+#    GenerateHarness()
+    
+    #Specify Target (Tag) for following runs:
+#    target_regime ='supthn_8' #'crit' #'suptln' # 'supthn' #'crit' #'suptln' #'crit' #'subthn'
+    target_regime ='subthn_6' 
+   
+
+#################        
+##### SIMULATE:
+#################
+#    SimulateHarness()  
 
 #################        
 ##### VISUALIZE:
-#################    
-##    for params, param_tag in zip(regimeParams[2:],
-##                                  ['subt_ln', 'subt_HN']):
-    for params, param_tag in zip(regimeParams[:2],
-                                 ['SUPT_ln', 'SUPT_HN']):
-#        for control_tag, c_function in zip(['cl', 'ol'],
-#                                       [getFeedbackControl,
-#                                        getOpenloopControl ]):
-                control_tag = 'ol'
-                c_function = getOpenloopControl
-                tag = param_tag + '_' + control_tag
-                #Visualize:
-                file_tag = '%s_%d'%(target_regime, N_spikes)
-                visualizeTrackingTrains(params,
-                                      target_train_tag=file_tag,                         
-                                      N_spikes=N_spikes,
-                                      N_samples = N_samples,                         
-                                      N_plot_samples=amin([N_samples,10]),
-                                      tag = tag,
-                                      save_fig = True,
-                                      t_max=11.)
+#################
+#    VisualizeHarness();    
+
                 
-
-############################
-###Increased Power Bounds:
-###########################
-    params = regimeParams[1]
-    param_tag = 'SUPT_HN'
-    control_tag = 'cl'
-#    
-    c_function = lambda params, Tf: getFeedbackControl(params, Tf,
-                                                       alpha_bounds = (-4,4))
-    tag = param_tag + '_' + control_tag + '_' +'aplus'
-    target_train_tag = '%s_%d'%(target_regime, N_spikes)
-    #Simulate:
-#    TargetTrainDriver(params,
-#                      target_train_tag=target_train_tag,
-#                      N_samples = N_samples,
-#                      N_spikes = N_spikes,
-#                      control_generator = c_function,
-#                      tag = tag,                      
-#                      dt = 1e-3)
-#    visualizeTrackingTrains(params,
-#                          target_train_tag=target_train_tag,
-#                          N_spikes=N_spikes,
-#                          N_samples = N_samples,                         
-#                          N_plot_samples=amin([N_samples,10]),
-#                          tag = tag,
-#                          save_fig = True,
-#                          t_max=11.)
-
-
-#    skip_missed = False;
-#    file_tag = 'Ahmadian'
-#    generateAhmadianTrain(file_tag)
-#    visualizeTargetTrain('Ahmadian',
-#                         save_fig_name='Ahmadian')
-##    generateTargetTrain(N_spikes)
-#    visualizeTargetTrain(file_tag='model_%d'%N_spikes)
+#################        
+##### ANALYZE:
+#################
+#    AnalyzeHarness();
     
-#    params = regimeParams[0]; tag = 'SUBTHN_cl_skip'
-#    TargetTrainDriver(params,
-#                              N_samples = N_samples,
-#                              N_spikes = N_spikes,
-#                              control_generator = getFeedbackControl,
-#                              tag = tag,
-#                              dt = 1e-4,
-#                              skip_missed=True)
-#    visualizeTrackingTrains(params,
-#                          N_spikes=N_spikes,
-#                           tag = tag,
-#                           save_fig=True)
+    
+  
+#    NewCLControllerHarness()
+#    TimerHarness();
+#    ProfileHarness()
 
-#    for params, param_tag in zip(regimeParams,
-#                                 ['CRITLN', 'CRITHN']):
-#        for control_tag, c_function in zip(['cl', 'ol'],
-#                                       [getFeedbackControl,
-#                                        getOpenloopControl ]):
-#                tag = param_tag + '_' + control_tag
-#                
-#                #Simulate:
-#        #        TargetTrainDriver(params,
-#        #                          target_train_tag=file_tag,
-#        #                          N_samples = N_samples,
-#        #                          N_spikes = N_spikes,
-#        #                          control_generator = c_function,
-#        #                          tag = tag,
-#        #                          dt = 1e-3)
-#                
-#                #Visualize:    
-#                visualizeTrackingTrains(params,                         
-#                                      N_spikes=N_spikes,
-#                                      tag = tag,
-#                                      save_fig = True)
+##### Correcness as function of beta study:
+#    NoiseRangeStudy(resimulate=False);
+
+##### Correcness as function of beta study:
+#    SingleTrainStudy(resimulate=False);
 
 
-#    params = regimeParams[0];
-##    param_tag = 'SUPERTLN_Ahmadian' #'CRITLN_Ahmadian'    
-#    for control_tag, c_function in zip(['cl', 'ol'],
-#                               [getFeedbackControl,
-#                                getOpenloopControl ]):
-#        
-#        #How to treat missed targets?
-#        tag = param_tag + '_' + control_tag
-#        if skip_missed:
-#            tag += '_skip' 
-#        
-#        #Simulate:
-##        TargetTrainDriver(params,
-##                          target_train_tag=file_tag,
-##                          N_samples = N_samples,
-##                          N_spikes = N_spikes,
-##                          control_generator = c_function,
-##                          tag = tag,
-##                          dt = 1e-3)
-#        
-#        #Visualize:    
-#        visualizeTrackingTrains(params,    
-#                              target_train_tag=file_tag,                         
-#                              N_spikes=N_spikes,
-#                              tag = tag,
-#                              save_fig = True)
     show()
     
