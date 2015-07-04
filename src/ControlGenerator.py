@@ -61,7 +61,7 @@ class CLControlGenerator(ControlGenerator):
                 return self._alpha_bounds[1]
             return apply_alphamax; 
         
-        #Must calculate HJB soln:
+        'Tf is such that we must calculate HJB soln:'
         ts = self._Solver._ts;
         indxs = where(ts>=self._max_Tf - Tf);
         
@@ -100,7 +100,7 @@ class OLControlGenerator(ControlGenerator):
         if Tf <= .0: 
         #Already overrunning:
             def openloop_alpha(t,x):            
-                return alpha_bounds[1]
+                return self._alpha_bounds[1]
             return openloop_alpha;
         else:
             params = self._params;
@@ -113,7 +113,7 @@ class OLControlGenerator(ControlGenerator):
         
             if 3*dt >= Tf:
                 def openloop_alpha(t,x):
-                    return alpha_bounds[1]
+                    return self._alpha_bounds[1]
                 return openloop_alpha; 
             
             #Set up solver
@@ -126,7 +126,7 @@ class OLControlGenerator(ControlGenerator):
             openloop_cs = cs_iterates[-1];
             def openloop_alpha(t,x):
                 if t>=Tf:
-                    return alpha_bounds[1]
+                    return self._alpha_bounds[1]
                 else:
                     return interp(t, openloop_ts, openloop_cs)
      

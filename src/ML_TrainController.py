@@ -13,6 +13,10 @@ from scipy.optimize.zeros import brentq
 from scipy.interpolate.interpolate import interp2d
 from scipy.interpolate.fitpack2 import RectBivariateSpline
 
+from matplotlib.pyplot import figure, subplot, ylabel, vlines, ylim, xlim, xlabel, title, plot,\
+subplots_adjust, Axes, setp, legend, hlines
+
+from pylab import hold
 #My solvers:
 from HJB_TerminalConditioner import calculateTs_Kolmogorov_BVP
 from AdjointSolver import FBKSolution, deterministicControlHarness,\
@@ -21,7 +25,7 @@ from HJBSolver import HJBSolver, HJBSolution
 energy_eps = .001;
 
 RESULTS_DIR = '/home/alex/Workspaces/Python/OptSpike/Results/MLTrainController/'
-FIGS_DIR = '/home/alex/Workspaces/Latex/OptSpike/Figs/MLTrainController'
+FIGS_DIR    = '/home/alex/Workspaces/Latex/OptSpike/Figs/MLTrainController'
 
 from matplotlib.patches import FancyArrowPatch, FancyArrow, ArrowStyle
 from matplotlib.font_manager import FontProperties
@@ -263,29 +267,41 @@ class MLControlledSimulation():
         xlabel('s', fontsize = xlabel_font_size)
         
         '''Visualize raster spikes Plot'''
-        rasterFig = figure()
-        ax2 = subplot(111)
-        plot(target_spikes, ones_like(target_spikes),
-              'r.', markersize = 10);
-        ax2.vlines(target_spikes, -N_samples-1., 2, colors='r', linestyles='dashed')
-        T_max = amax(target_spikes);
+        from TrainController import makeRasterPlot,\
+             windowSmoothTargetTrain,\
+             generateProbabilityOfFire
+             
+        TargetTrainsList = []
         for idx, MLSoln in enumerate(self.SolnsList):
             MLSoln._dBs = zeros_like(MLSoln._Xs[:-1,:])
             MLAnnSoln = MLAnnotatedSolution(MLSoln, 
                                             refractory_time=self.refractory_time,
                                             v_thresh=self.V_thresh)
-            tracking_spikes = MLAnnSoln.spike_times
-    
-            plot(tracking_spikes,
-              (- 1 -idx) * ones_like(tracking_spikes), 'b.')
-            T_max = amax(r_[T_max,
-                            amax(tracking_spikes)]);
-    
-        ax2.set_ylabel('induced spikes', fontsize =xlabel_font_size)
-        ax2.set_xlabel('$s$', fontsize = xlabel_font_size) 
-        ax2.set_ylim(-N_plot_samples-1., 2); 
-        ax2.hlines(0, 0, ax2.get_xlim()[1], colors='k')
-        
+            TargetTrainsList.append(MLAnnSoln.spike_times);
+        '''raster plot it:'''
+        rasterFig = makeRasterPlot(target_spikes,
+                                       TargetTrainsList, 
+                                       N_plot_samples,
+                                       t_max=2e3,
+                                       sigma_window = .1*100,
+                                       window_delta = .1*100,
+                                       time_symbol = 's') 
+#        print figs_tag +
+        N_sims = len(TargetTrainsList);
+        N_spikes = len(target_spikes);
+        tracking_spikes = array(TargetTrainsList).reshape((N_sims, N_spikes));
+        time_errors = tracking_spikes - tile(target_spikes, (N_sims,1));
+        rms_error = sqrt(mean(time_errors * time_errors));
+        mean_error = mean(abs(time_errors));
+        mean_interval = mean(diff(r_[0, target_spikes]));
+        percent_rms_error = 100* rms_error / mean_interval;
+        print '%s: rms error = %.2f ,\
+         relative rms error =  %.2f;\
+                  mean interval = %.2f'%(figs_tag,
+                                      rms_error,
+                                       percent_rms_error,
+                                        mean_interval)
+
         if None != figs_tag:
             for label, fig in zip(['example', 'raster'],
                                       [exampleFig, rasterFig]):
@@ -335,7 +351,8 @@ def SimulationHarness(OUparams, MLparams,
                       regime_tag = '1',
                       Tf = 2e3,
                       dt = 2e-1,
-                      control_tag = 'cl'):
+                      control_tag = 'cl',
+                      figs_tag='cl'):
     '''If simulate and NOT reload:
          the old results will be overwritten with a new simulation
     If simulate and reload:
@@ -360,7 +377,7 @@ def SimulationHarness(OUparams, MLparams,
         'Run:'
         start= time.clock()
         Sim.runBatch(N_sampled_trajectories)
-        print 'Simulating %d %s::trajectories takes %f s'%(N_sampled_trajectories,
+        print 'Simulating %d %s::trajectories takes %.2f s'%(N_sampled_trajectories,
                                                            control_tag,
                                                            time.clock() - start);
         'Save:'
@@ -370,22 +387,20 @@ def SimulationHarness(OUparams, MLparams,
     Sim = MLControlledSimulation.load(sim_file_name);
     print 'N= ', len(Sim.SolnsList);
     
-    Sim.visualize(figs_tag=control_tag)
+    Sim.visualize(figs_tag=figs_tag)
 
 
-def BatchHarness(simulate = True,
+def TrajectoriesAvailableHarness(simulate = True,
                  reload = True,
                  regime_tag = '1',
-                 Tf = 2e3,
-                 A_max=10.,
+                 Tf = 2e4,
+                 A_max=10.0,
                  N_sampled_trajectories=1):
     '''If simulate and NOT reload:
          the old results will be overwritten with a new simulation
-    If simulate and reload:
-         the old results will be augmented'''
-    
-    Tf = 2e4;
-    
+       If simulate and reload:
+         the old results will be augmented with the new simulations'''
+     
     file_name = 'Basic_Example_Type%s_%.1f'%(regime_tag,Tf)
     A_bounds = array([-A_max, A_max]);
     OUparams, MLparams  = generateOUFromMLAnnSoln(file_name,
@@ -434,7 +449,8 @@ def BatchHarness(simulate = True,
                              N_sampled_trajectories=N_sampled_trajectories,
                               regime_tag=regime_tag,
                                Tf=Tf,
-                                control_tag=control_tag)
+                                control_tag=control_tag,
+                                figs_tag = control_tag)
         
 
 def SpikesOnlyHarness(simulate = True,
@@ -451,7 +467,8 @@ def SpikesOnlyHarness(simulate = True,
     file_name = 'Basic_Example_Type%s_%.1f'%(regime_tag,Tf)
     A_bounds = array([-A_max, A_max]);
     OUparams, MLparams  = generateOUSpikesOnlyFromMLAnnSoln(file_name,
-                                                            A_bounds)
+                                                            A_bounds,
+                                                            C_hat = 20.)
     
     print OUparams.getMCSigma();
     
@@ -482,7 +499,12 @@ def SpikesOnlyHarness(simulate = True,
                          N_sampled_trajectories=N_sampled_trajectories,
                           regime_tag=regime_tag,
                            Tf=Tf,
-                            control_tag=control_tag)
+                            control_tag=control_tag,
+                            figs_tag = control_tag)
+    
+###########################################################################
+###########################################################################
+    
 def TimerHarness():
         regime_tag = '1'
         Tf = 2e3;
@@ -542,12 +564,13 @@ if __name__ == '__main__':
 #################        
 ##### SIMULATE:
 #################
-    BatchHarness(simulate=True,
-                 reload=False,
-                 N_sampled_trajectories=10)
-#    SpikesOnlyHarness(simulate=True,
-#                      reload = True,
-#                      N_sampled_trajectories=0)
+    TrajectoriesAvailableHarness(simulate=False,     
+                 reload =True,            
+                 N_sampled_trajectories=1)
+#    
+    SpikesOnlyHarness(simulate=False,
+                      reload = True,
+                      N_sampled_trajectories=7)
 
 
 #################        
@@ -555,6 +578,6 @@ if __name__ == '__main__':
 #################
 #    TimerHarness();
 #    ProfileHarness();
-   
+#    print 'Not Showing'
     show()
     

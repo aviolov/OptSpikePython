@@ -59,6 +59,7 @@ class MLParameters():
         self.I =I 
         self.sigma =sigma 
         self.gamma =gamma 
+        
     def printme(self, file_name=None):
         diag_str = 'ML::Type%s:\n'%self.regime_tag
         if None == file_name:
@@ -220,10 +221,12 @@ def generateOUFromMLAnnSoln(ML_ann_file_name,
         return OUParams, MLAnnSoln.MLSoln._params;
              
 def generateOUSpikesOnlyFromMLAnnSoln(ML_ann_file_name,
-                                      A_bounds = [-20, 20]):
+                                      A_bounds = [-20, 20],
+                                      C_hat = 20.):
         MLAnnSoln = MLAnnotatedSolution.load(ML_ann_file_name)
         OU_estimates = estimateOUfromMLSpikesOnly(MLAnnSoln,
-                                                  visualize = False);
+                                                  visualize = False,
+                                                  C_hat = C_hat);
         meanISI = MLAnnSoln.getMeanISI();
         m, C, sigma = OU_estimates[:]
         OUParams = OUParameters(MLAnnSoln.v_OU_bound,
@@ -387,6 +390,7 @@ class MLAnnotatedSolution():
         self.interval_ss, self.interval_Vs, \
         self.diffusion_ss, self.diffusion_Vs, self.diffusion_dBs = self.annotate();
         
+        
 #        self.spike_ts = 
     def getMeanISI(self):
         ISIs = self.getISIs()
@@ -399,6 +403,8 @@ class MLAnnotatedSolution():
             return self.spike_times - self.reset_times
         elif  len(self.spike_times) == (len(self.reset_times)-2):
             return self.spike_times - self.reset_times[:-2]
+        elif  len(self.spike_times) == (len(self.reset_times)-1):
+            return self.spike_times - self.reset_times[:-1]
         else:
             raise RuntimeError('''spike times and reset times
                                  have weird lengths: %d, %d'''%(len(self.spike_times) ,
@@ -421,22 +427,29 @@ class MLAnnotatedSolution():
         diffusion_regime = True;
         while tk < len(ss):
             V = Vs[tk];
-            if diffusion_regime:
+            if True == diffusion_regime:
                 if V > self.v_OU_bound:
-                    diffusion_regime = False;
                     OU_cross_indxs.append(tk);
+                    diffusion_regime = False;
             else:
                 if V > self.v_thresh:
                     spike_indxs.append(tk);
                     tk += refractory_indx_interval;
-                    reset_indxs.append(tk)
+                    if tk<len(ss):
+                        reset_indxs.append(tk)
+                    else:
+                        reset_indxs.append(len(ss)-1)
                     diffusion_regime = True
+                        
+            'increment time'       
             tk += 1
-        'add the last interval to diffusion regimes:'
-        if Vs[-1] < self.v_OU_bound:
-            OU_cross_indxs.append(len(ss)-1);
-            reset_indxs.append(len(ss)-1);
             
+#        'add the last interval to diffusion regimes:'
+#        if Vs[-1] < self.v_OU_bound and diffusion_regime==True:
+#            OU_cross_indxs.append(len(ss)-1);
+#            reset_indxs.append(len(ss)-1);
+            
+        'assign spike-times, reset-times, cross-times:'     
         spike_times = ss[spike_indxs];
         reset_times = ss[reset_indxs];
         OU_cross_times = ss[OU_cross_indxs];
@@ -447,7 +460,7 @@ class MLAnnotatedSolution():
         diffusion_ss  = []
         diffusion_Vs  = []
         diffusion_dBs = []
-        print reset_indxs[:-1] ,OU_cross_indxs
+#        print reset_indxs[:-1] ,OU_cross_indxs
         
         for rk_prev, rk_next, sk in zip(reset_indxs[:-1],
                                         reset_indxs[1:],
@@ -492,14 +505,17 @@ class MLAnnotatedSolution():
 #######################################################################################
 
 def MLSimulateHarness(resimulate=False, regime_tag = '1', Tf = 2000., dt = 1e-2):
+    
     file_name = 'Basic_Example_Type%s_%.1f'%(regime_tag, Tf);
     
+        
     if resimulate:
         seed(2014)
         ML_params = MLParametersDict[regime_tag]
         params_file_name = os.path.join(FIGS_DIR, 
                                         'MLParams_type%s.txt'%ML_params.regime_tag)
         ML_params.printme(file_name = params_file_name)
+        
         
         MLSim = MLSimulator(ML_params);
         
@@ -772,9 +788,11 @@ def generateFakeMLDataFromOU(regime_tag = '1',
 
 def estimateOUfromML(MLAnnSoln,
                      visualize=False):
+    'Find the OU parameters mu,tau,sigma from the diffusion part of an ML process'
     ts, Xs = MLAnnSoln.diffusion_ss,\
                 MLAnnSoln.diffusion_Vs
       
+    
     delta = MLAnnSoln.MLSoln._ts[2]-MLAnnSoln.MLSoln._ts[1];
     
     N_trajectories = len(Xs);
@@ -809,7 +827,7 @@ def estimateOUfromML(MLAnnSoln,
     
         return sqrt(sigma_squared);
 
-    def root_function(beta):
+    def root_functionAI(beta):
         #calc mu:
         mu = mu_hat_function(beta);
         
@@ -834,8 +852,38 @@ def estimateOUfromML(MLAnnSoln,
         b_error =  exp(-K*delta * beta) - data_error_term;
         
         return b_error
+    
    
     #Perform Root finding:
+
+    def root_function(beta):
+        #calc mu:
+        mu = mu_hat_function(beta);
+        
+        #an exponential that occurs often:
+        K = N_trajectories
+        
+        numerator = .0
+        denominator = .0;
+        for stk in xrange(N_trajectories):
+            Xn = Xs[stk][1:] 
+            Xm = Xs[stk][:-1] 
+            
+            if 0 == Xn.size:
+                'WARNING: Why can it ever be empty...'
+                continue
+            numerator += dot(Xn-mu,
+                            Xm-mu)
+            denominator += dot(Xm-mu,
+                              Xm-mu);
+        #the reduced log-likelihood:               
+        data_error_term = numerator/denominator;
+            
+        b_error =  exp(-delta * beta) - data_error_term;
+        
+        return b_error
+    
+#    root_function = root_functionSD
     b_a = 0.001
     b_b =  1.
     
@@ -853,7 +901,7 @@ def estimateOUfromML(MLAnnSoln,
     from scipy.optimize import brentq
     'root-find beta'
     beta_hat = brentq(root_function, b_a, b_b,
-                      xtol = 1e-3)
+                      xtol = 1e-8)
     'Compute the other two params'
     mu_hat = mu_hat_function(beta_hat)
     sigma_hat = sigma_hat_function(beta_hat, mu_hat)
@@ -1012,22 +1060,27 @@ def MLEstimateHarness(regime_tag=1, Tf = 20000.0,
 
 
 def OUEstimateHarness(Tf = 160000.0):    
-    
     OU_file_name = 'OU_from_ML'
     m_C_sigma = array([-28, 30, 1.]);
     generateFakeMLDataFromOU('1', Tf,
                               m_C_sigma=m_C_sigma,
                               save_file_name = OU_file_name)
     
-#    OU_file_name = 'OU_stat_trajs'
+    OU_file_name = 'OU_stat_trajs'
 #    generateStationaryOUData(Tf, m_C_sigma=m_C_sigma,
 #                       save_file_name = OU_file_name)
     
     MLAnnSoln = MLAnnotatedSolution.load('%s_T%d'%(OU_file_name,
                                                    Tf));
+        
+#    figure();
+#    for k in xrange(len(MLAnnSoln.diffusion_ss)):
+#        plot(MLAnnSoln.diffusion_ss[k],\
+#                MLAnnSoln.diffusion_Vs[k]);
+#    return
     
     OU_OUestimates = estimateOUfromML(MLAnnSoln,
-                                      visualize = False);
+                                      visualize = True);
 
     print m_C_sigma
     print OU_OUestimates     
@@ -1083,7 +1136,8 @@ def MLSpikesOnlyEstimateHarness(regime_tag=1, Tf = 20000.0,
 def UnitsConversionHarness(regime_tag='1', Tf = 2000.0):
     file_name = 'Basic_Example_Type%s_%.1f'%(regime_tag,Tf)
     
-    OUParams, MLParams  = generateOUFromMLAnnSoln(file_name)
+    OUParams, MLParams  = generateOUFromMLAnnSoln(file_name,
+                                                  A_bounds = [-10, 10])
     
     ss = arange(0,OUParams.meanISI,1e-1)
     ts = OUParams.nondimensionalizeTime(ss)
@@ -1153,23 +1207,35 @@ def UnitsConversionHarness(regime_tag='1', Tf = 2000.0):
     OUParams.printme()
     OUParams.printme('OUDims2Nondims.txt')
     
+
+def SpikeOnlyEstimates(regime_tag='1', Tf = 20000.0):
+    file_name = 'Basic_Example_Type%s_%.1f'%(regime_tag,Tf)
+    
+    OUParams, MLParams  = generateOUSpikesOnlyFromMLAnnSoln(file_name,
+                                                            A_bounds = [-10, 10])
+    
+    OUParams.printme()
+    OUParams.printme('OUDims2Nondims_spikesonly.txt')
+    
     
 if __name__ == '__main__':
     from pylab import *
     
 #    MLSimulateHarness(resimulate=False, regime_tag='1', Tf = 2e3);
-#    MLSimulateHarness(resimulate=True, regime_tag='2')
+#    MLSimulateHarness(resimulate=False, regime_tag='2')
 
 #    MLAnnotateHarness()
 #    MLEstimateHarness(Tf=2e3);
 
     
     Tfs = [2e3, 2e4, 4e4, 16e4, 64e4];
-    for Tf in Tfs[0:4]:
-        MLEstimateHarness(Tf=Tf)
+#    for Tf in Tfs[0:2]:
+#        MLEstimateHarness(Tf=Tf,
+#                          latexify=True)
 
 
-#    UnitsConversionHarness()
+#    UnitsConversionHarness(Tf=2e4)
+#    SpikeOnlyEstimates()
 
 ###################################################
 ##################  SPIKES ONLY:    ###############
@@ -1179,7 +1245,6 @@ if __name__ == '__main__':
 #    MLSpikesOnlyEstimateHarness(Tf=2e4)
 #    for Tf in [2e4, 16e4]:
 #        OUEstimateHarness(Tf=Tf)
-        
-    
+       
     show()
             

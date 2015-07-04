@@ -18,8 +18,11 @@ from scipy.interpolate.fitpack2 import RectBivariateSpline
 from HJB_TerminalConditioner import calculateTs_Kolmogorov_BVP
 from matplotlib.patches import FancyArrowPatch, FancyArrow, ArrowStyle
 from AdjointSolver import FBKSolution, deterministicControlHarness,\
-    calculateOptimalControl, FPAdjointSolver
+    calculateOptimalControl, FPAdjointSolver, label_font_size
 from matplotlib.font_manager import FontProperties
+from PathSimulator import ABCD_LABEL_SIZE
+from matplotlib.pyplot import figure, subplot, ylabel, vlines, ylim, xlim, xlabel, title, plot,\
+subplots_adjust, Axes, setp, legend, hlines
 
 RESULTS_DIR = '/home/alex/Workspaces/Python/OptSpike/Results/TrainController/'
 FIGS_DIR = '/home/alex/Workspaces/Latex/OptSpike/Figs/TrainController'
@@ -318,7 +321,6 @@ def runSingleTarget(params, Tf,
                     dt = 1e-3, x_thresh=1.0,
                     save_trajectories = False):
     '''Hit a single target:'''  
-
     #get Control: 
     control_func = control_generator(params, Tf)
     mu, tauchar, beta = params[0], params[1], params[2];
@@ -347,9 +349,9 @@ def runSingleTarget(params, Tf,
         k+=1
                 
         if x >= x_thresh:
-            end =  time.clock();
-            print 'spike_iterates = %d, ISI_compute_time = %.2f'%(k,
-                                                                  end-start)
+#            end =  time.clock();
+#            print 'spike_iterates = %d, ISI_compute_time = %.2f'%(k,
+#                                                                  end-start)
             if save_trajectories:
                 return t, xs, cs
             else:
@@ -488,11 +490,9 @@ def visualizeTrackingTrains(params,
                           N_plot_samples = 1,
                           N_spikes = 3,
                           tag = 'cl',
-                          t_max = 7.,
+                          t_max = 12.,
                           save_fig = False):
-    
-    if N_plot_samples > N_samples:
-        raise RuntimeError('N_plor_samples > N_samples')
+    N_plot_samples = min(N_plot_samples, N_samples);
     
     #the target train:
     target_file_name = 'target_%s'%(target_train_tag)   
@@ -501,7 +501,7 @@ def visualizeTrackingTrains(params,
     
     #the tracking trains:
     file_name = 'TargetTrainList_%d_%d_%s'%(N_spikes, N_samples, tag)
-    print 'loading target train ', file_name
+    print 'loading tracking trains: ', file_name
     file_name = os.path.join(RESULTS_DIR, file_name + '.lst')
     import cPickle
     load_file = open(file_name, 'r')
@@ -509,71 +509,83 @@ def visualizeTrackingTrains(params,
     N_samples = len(TargetTrainsList)
     load_file.close()
     
-    file_name = None;
-    file_name = 'target_%s'%(target_train_tag) 
-    ST = SpikeTrain.load(file_name)
-    spikes = ST._spike_times;
+    makeRasterPlot(TargetTrain,
+                    TargetTrainsList, 
+                    N_plot_samples,
+                     t_max)
     
-    sigma_window=.1
+    if save_fig:
+        lfig_name = os.path.join(FIGS_DIR, tag + '_trains_sim_%d.pdf'%N_samples)
+        print 'saving to ', lfig_name
+        savefig(lfig_name, dpi = 300)
+
+
+def makeRasterPlot(TargetTrain,
+                   TargetTrainsList,
+                   N_plot_samples,
+                   t_max,
+                   sigma_window=.1,
+                   window_delta =.1,
+                   time_symbol = 't'):
+    from matplotlib.pyplot import subplots_adjust, figure, subplot, Axes, plot
     smoothed_ts, smoothedTarget = windowSmoothTargetTrain(TargetTrain,
                                                           sigma_window=sigma_window) 
-    window_delta = .1
     ts, probOfFire = generateProbabilityOfFire(TargetTrainsList,
                                                window_delta = window_delta)
     
-    figure(figsize = (17, 8)); hold(True)
-    subplots_adjust(left=.05, right=.975,
+    fig_handle = figure(figsize = (17, 8)); 
+    subplots_adjust(left=.05, right=.9,
                     top = .95, bottom = .2,
                     wspace = .02) 
     
     ax1 = subplot(211)
+    ax1.hold(True)
     plot(ts, probOfFire, 'b', label='Empirical')
     plot(smoothed_ts, smoothedTarget, 'r', label='Smoothed Target')
-    y_up = 5.0
-    ylim(.0, y_up)#    ylim(.0, amax(probOfFire))
-    ax1.vlines(spikes, .0, y_up, colors='r', linestyles='dashed')
-    
-#    xlim(-.25, 30.)
+    y_up = .5 / sigma_window 
+    ax1.set_ylim(.0, y_up)#    ylim(.0, amax(probOfFire))
+    ax1.vlines(TargetTrain, .0, y_up, colors='r', linestyles='dashed')
     ax1.yaxis.tick_right()
-    ax1.set_yticks((0., 5.0))
-    ax1.set_yticklabels(('$0$', '$5$'), fontsize = label_font_size)
-           
+    ax1.set_yticks((0., y_up))
+    ax1.set_yticklabels(('$0$', '$%.2f$'%y_up), fontsize = label_font_size)
     setp(ax1.get_xticklabels(), visible=False)
     ylabel('Firing Rate', fontsize =xlabel_font_size)
     legend(loc='upper right')
 
     #############################################                    
     ax2 = subplot(212)
-    plot(spikes, ones_like(spikes), 'r.');
+    plot(TargetTrain, ones_like(TargetTrain), 'r.');
     
-    ax2.vlines(spikes, -N_samples-1., 2, colors='r', linestyles='dashed')
+    ax2.vlines(TargetTrain, -N_plot_samples-1., 2, colors='r', linestyles='dashed')
     for idx in xrange(N_plot_samples):
         generated_spikes = TargetTrainsList[idx]
         plot(generated_spikes,
               (- 1 -idx) * ones_like(generated_spikes), 'b.')
     
-    ylabel('induced spikes', fontsize =xlabel_font_size)  
-    xlabel('$t$', fontsize = xlabel_font_size) 
-    ylim(-N_plot_samples-1., 2); 
+    ylabel('Induced spikes', fontsize =xlabel_font_size)  
+    xlabel('$%s$'%time_symbol, fontsize = xlabel_font_size) 
+    ax2.set_ylim(-N_plot_samples-1., 2);
 #    xlim(-.25, max([spikes[-1],
 #                    ts[-1] + window_delta]))
 #    xlim(-.25, 30.)
     
-    for ax in ax1, ax2:
+    for pidx, ax in enumerate([ax1, ax2]):
 #        ax.set_xlim(.0, max([spikes[-1],
 #                             ts[-1] + window_delta]))
         ax.set_xlim(.0, t_max)
+        ax.text(1.05, .8, '(%s)'%chr(65 + pidx),
+                         horizontalalignment='center',
+                         verticalalignment='center',
+                         transform=ax.transAxes,
+                         fontsize = ABCD_LABEL_SIZE)
+        
     
     hlines(0, 0, t_max, colors='k')
     
     setp(ax2.get_yticklabels(), visible=False)
     for label in ax2.xaxis.get_majorticklabels():
             label.set_fontsize(label_font_size)
-    if save_fig:
-        lfig_name = os.path.join(FIGS_DIR, tag + '_trains_sim_%d.pdf'%N_samples)
-        print 'saving to ', lfig_name
-        savefig(lfig_name, dpi = 300)
-
+    return fig_handle
 
 def ComputeTargetDeviation(params,   
                               target_train_tag,
@@ -743,58 +755,77 @@ def GenerateHarness(generate_new=False, N_generated = 9):
 
 #    analyzeTargetTrains()
 
+from ControlGenerator import OLControlGenerator, CLControlGenerator    
+def SimulateHarness(resimulate = False,
+                    target_regime ='supthn_8',
+                    N_spikes  = 16,
+                    N_samples = 50,
+                    energy_eps=.001):
     
-def SimulateHarness():
-# SIMULATE:  
-    from multiprocessing import Process
-    procs = [];
-    for params, param_tag in zip(regimeParams[:2],
-                             ['SUPT_ln', 'SUPT_HN']):
-#    for params, param_tag in zip(regimeParams[2:],
-#                                 ['subt_ln', 'subt_HN']):
-#        for control_tag, c_function in zip(['cl', 'ol'],
-#                                       [getFeedbackControl,
-#                                        getOpenloopControl ]):
-#        for control_tag, c_function in zip(['ol'],
-#                                       [getOpenloopControl]):
-        for control_tag, c_function in zip(['cl'],
-                                       [getFeedbackControl]):
+    target_train_tag = '%s_%d'%(target_regime,
+                               N_spikes)
+    
+    regimeParams = [ [mu_high/tau_char, tau_char, beta_low],
+                     [mu_high/tau_char, tau_char, beta_high],
+                     [mu_low/tau_char, tau_char, beta_low],  
+                     [mu_low/tau_char, tau_char, beta_high]  ]
+
+    
+    
+    
+    ##### SIMULATE:  #####
+#    alpha_bounds = [-2,2];
+    for params, param_tag,\
+             alpha_bounds in zip(regimeParams[:2] + regimeParams[1:2],
+                                 ['SUPT_ln', 'SUPT_HN'] + ['SUPT_HN'],
+                                 [[-2,2], [-2,2],  [-4,4]]):
         
+#    alpha_bounds = [-4,4];
+#    for params, param_tag in zip(,
+#                                 ['SUPT_HN']):
+        
+        max_Tf_2calculate = 3.0
+        clGenerator = CLControlGenerator(params,
+                                      alpha_bounds=alpha_bounds,
+                                      energy_eps = energy_eps,
+                                      max_Tf=max_Tf_2calculate)
+        olGenerator = OLControlGenerator(params,
+                                      alpha_bounds=alpha_bounds,
+                                       energy_eps= energy_eps)
+        control_tags = {olGenerator:'ol',
+                        clGenerator: 'cl'}
+        
+        for c_function in [olGenerator, clGenerator]: #clGenerator
+            control_tag = control_tags [c_function]
 
-                tag = param_tag + '_' + control_tag
-                file_tag = '%s_%d'%(target_regime, N_spikes)
-                #Simulate:
-                procs.append( Process(target=TargetTrainDriver,
-                                      args=(params,),
-                                      kwargs = {'target_train_tag':file_tag,
-                                              'N_samples':N_samples,
-                                              'N_spikes':N_spikes,
-                                              'control_generator':c_function,
-                                              'tag' :tag}) )
-#                TargetTrainDriver(params,
-#                                  target_train_tag=file_tag,
-#                                  N_samples = N_samples,
-#                                  N_spikes = N_spikes,
-#                                  control_generator = c_function,
-#                                  tag = tag,
-#                                  dt = 1e-3)
-                procs[-1].start()
-                
-    for proc in procs:
-        proc.join()
-
-def AnalyzeHarness():
-    for params, param_tag in zip(regimeParams[:2],
-                                 ['SUPT_ln', 'SUPT_HN']):
-        control_tag = 'cl'
-        generated_trains_tag = param_tag + '_' + control_tag
-        #compute percentage correct:
-        target_train_tag = '%s_%d'%(target_regime, N_spikes)
-        ComputeTargetDeviation(params,
+            tracking_file_tag = '%s_%s_Amax%d' %(param_tag,
+                                  control_tag,
+                                   alpha_bounds[1]);
+            #Simulate:
+            if resimulate:
+                TargetTrainDriver(params,
                               target_train_tag=target_train_tag,
-                              generated_trains_tag = generated_trains_tag,
-                              N_spikes=N_spikes,
-                              N_samples = N_samples)
+                              N_samples = N_samples,
+                              N_spikes = N_spikes,
+                              control_generator = c_function,
+                              tag = tracking_file_tag,
+                              dt = 1e-3)
+                
+            visualizeTrackingTrains(params,
+                                     target_train_tag,
+                                      N_samples, 
+                                      N_plot_samples=min(10, N_samples),
+                                       N_spikes=16,
+                                       t_max = 12, 
+                                       tag=tracking_file_tag,
+                                        save_fig=True)
+
+#                ComputeTargetDeviation(params,
+#                              target_train_tag=target_train_tag,
+#                              generated_trains_tag = generated_trains_tag,
+#                              N_spikes=N_spikes,
+#                              N_samples = N_samples)
+
 
 
 def IncreasedPowerBandsHarness():
@@ -945,6 +976,7 @@ def NewCLControllerHarness():
         new_time += new_end - old_end;
     
     print 'new vs. old time, (ratio):',    new_time,    old_time, new_time/old_time
+    
 def TimerHarness():
     
     target_train_tag = 'supthn_8_16' 
@@ -1012,6 +1044,7 @@ def NoiseRangeStudy(resimulate = False):
                                                               m/tau_char, b)
                 params = [m/tau_char, tau_char, b];
                 
+                'Recompute Statistics???'
                 if resimulate:
                     fbcGenerator = CLControlGenerator(params,
                                                   alpha_bounds=(-2, 2),
@@ -1062,6 +1095,214 @@ def NoiseRangeStudy(resimulate = False):
             #//for driving regime
         #//for target regime
 
+
+
+def NoiseRangeStudySingleTf(resimulate = False,
+                            N_samples = 1000,
+                            Tf =1.5,
+                            energy_eps=.001,
+                            correctness_threshold_fraction = .1):
+    import cPickle
+    ms = [mu_high, mu_low]
+    Alpha_maxs  = [2,4];
+#    Alpha_maxs  = [2];
+
+#    bs = arange(.2, 1.8, .2)
+    bs = arange(.3, 1.51, .2)
+#    bs = array([.3,1.5])
+#    bs = arange(1.4, 1.8, .3)
+    
+    results_file_name = os.path.join(RESULTS_DIR,
+                                     'NoiseRangeStudyData.pck')
+    
+    control_tags = ['cl', 'ol']
+#    control_tags = ['cl']
+    'Entire for loops for generating the data:'
+    if resimulate:
+        ResultsDict = {}
+        for alpha_max in Alpha_maxs:
+            ResultsDict[alpha_max] = {};    
+            for m in ms:
+                ResultsDict[alpha_max][m] = {};
+                for b in bs:
+                    ResultsDict[alpha_max][m][b] = {}
+                    params = [m/tau_char, tau_char, b];
+                    print 'params:', params
+                    alpha_bounds = [-alpha_max, alpha_max];
+                    clGenerator = CLControlGenerator(params,
+                                      alpha_bounds=alpha_bounds,
+                                      energy_eps = energy_eps,
+                                      max_Tf=Tf)
+                    olGenerator = OLControlGenerator(params,
+                                      alpha_bounds=alpha_bounds,
+                                      energy_eps = energy_eps)
+#                    olGenerator = clGenerator
+                    controlGenerators = {'ol':olGenerator,
+                                         'cl': clGenerator}
+                    common_seeds = randint(.0, 1e9, N_samples);
+                    for control_tag  in control_tags:
+                        cGenerator = controlGenerators[control_tag]
+                        control_func = cGenerator(params, Tf)
+                        wrapGenerator = lambda params, Tf: control_func;
+                        spike_times = empty(N_samples);
+                        for tdx in xrange(N_samples):
+                            seed([common_seeds[tdx]])
+                            spike_times[tdx] = runSingleTarget(params, Tf, 
+                                                 wrapGenerator);
+#                        print spike_times
+                        ResultsDict[alpha_max][m][b][control_tag] = spike_times;     
+                    #//end ol|cl loop
+                #//end b loop
+            #// end m loop
+        #// end alpha_max loop
+        print ResultsDict;
+        dump_file = open(results_file_name, 'wb')
+        cPickle.dump(ResultsDict, dump_file, 1) # 1: bin storage
+        dump_file.close()
+    #// end resimulate:
+    
+    ### ANALYZE:
+    load_file = open(results_file_name, 'r')
+    ResultsDict = cPickle.load(load_file);
+    load_file.close()
+
+    def calcPercentCorrect(_ts):
+        error = abs(_ts - Tf)
+        return len(error[error<correctness_threshold_fraction*Tf]) / len(_ts) * 100.0;
+    def calcMSE(_ts):
+        error = abs(_ts - Tf)
+        return sum(error*error) / len(_ts)
+    PercentCorrect = {}
+    MeanSquaredErrors = {}
+    for alpha_max in Alpha_maxs:
+        PercentCorrect[alpha_max] = {};
+        MeanSquaredErrors[alpha_max] = {}    
+        for m in ms:
+            PercentCorrect[alpha_max][m] = {};
+            MeanSquaredErrors[alpha_max][m] = {};
+            for control_tag in control_tags:
+                PercentCorrect[alpha_max][m][control_tag]    =\
+                     [calcPercentCorrect(ResultsDict[alpha_max][m][b][control_tag]) for b in bs];
+                MeanSquaredErrors[alpha_max][m][control_tag] =\
+                     [calcMSE(ResultsDict[alpha_max][m][b][control_tag]) for b in bs];
+                
+#                print control_tag, ResultsDict[alpha_max][m][bs[0]][control_tag] 
+            #//end ol|cl loop
+        #// end m loop
+    #// end alpha_max loop
+    
+    #VISUALIZE:
+    print 'N = ', len(ResultsDict[Alpha_maxs[0]][ms[0]][bs[0]][control_tags[0]])
+    print 'bs = ', ResultsDict[Alpha_maxs[0]][ms[0]].keys()
+    
+    #HISTOGRAMS:
+    figure()
+    for alpha_max in Alpha_maxs[:1]:
+        for m in ms[:1]:
+            for pidx, control_tag in enumerate(control_tags):
+                b = bs[2]
+                ts = ResultsDict[alpha_max][m][b][control_tag]
+                errors = ts - Tf
+                subplot(2,1,pidx+1)
+                hist(errors, bins = 64, label=control_tag, normed=True)
+                vlines([Tf*(-correctness_threshold_fraction),
+                        Tf*(correctness_threshold_fraction)], .0, 6.)
+                title('mu =  %.2f beta = %.2f: ; Percent Correct = %.2f, Sq Error = %.2f'%(m,b,
+                                                                                         calcPercentCorrect(ts),
+                                                                                         calcMSE(ts)))
+                legend()
+    fig_file_name = os.path.join(FIGS_DIR,
+                                 'SingleISI_ControlError_Histograms.pdf')
+    
+    print 'saving to figure to ', fig_file_name
+    savefig(fig_file_name);
+#    print 'WARNING EARLY RETURN:'
+#    return 
+                
+    
+    regime_tags = {mu_high:'Supra-Threshold',
+                   mu_low: 'Sub-Threshold'}
+    figure(figsize=(17,12))
+    subplots_adjust(left=.1,   right=.975,
+                    top = .9,   bottom = .1,
+                    wspace = .35, hspace =.3)
+    
+    for a_idx, alpha_max in enumerate(Alpha_maxs):
+        for row_idx, m in enumerate(ms):
+            for control_tag, clinestyle in zip(control_tags,
+                                               ['+--', '+-']):
+                ax = subplot(2, 2, row_idx*2 + 1);
+                plot(bs, PercentCorrect[alpha_max][m][control_tag], 
+                     clinestyle,
+                     label= '%s:amax=%.0f'%(control_tag, alpha_max))
+#                title('%s : Percent Correct (thresh=%.2f pct.)'%(regime_tags[m],
+#                                                                 correctness_threshold_fraction))
+                title('Percent Correct', fontsize = label_font_size)
+                ylabel('%', fontsize= xlabel_font_size)
+                ylim((.0, 100.0))
+                yticks = [.0, 50, 100]
+                ax.set_yticks(yticks);
+                ax.set_yticklabels(['$%d$'%p for p in yticks],
+                         fontsize = label_font_size)
+#                legend(loc='upper right')
+                ax = subplot(2, 2, row_idx*2 + 2);
+                plot(bs, MeanSquaredErrors[alpha_max][m][control_tag],
+                     clinestyle,
+                     label= '%s:amax=%.0f'%(control_tag, alpha_max))
+                ylabel(r'$(T_{sp}-t^*)^2$', fontsize= xlabel_font_size)
+                yticks = [.0, .45, .9]
+                ylim((.0, .9))
+                ax.set_yticks(yticks);
+                ax.set_yticklabels(['$%.2f$'%p for p in yticks],
+                         fontsize = label_font_size)
+                title('Avg. Squared Spike-Time Deviation',
+                      fontsize = label_font_size)
+                fontP = FontProperties()
+                fontP.set_size(20) 
+                legend(loc='upper left', prop = fontP)
+    for pidx in xrange(1,5):
+        ax = subplot(2,2,pidx)
+        ax.set_xticks(bs);
+        ax.set_xticklabels(['$%.1f$'%b for b in bs],
+                         fontsize = label_font_size)
+    for pidx in xrange(3,5):
+        ax = subplot(2,2,pidx)
+        ax.set_xlabel(r'$\beta$', fontsize = xlabel_font_size);
+    
+    '''Annotate for Susane:'''
+#    for pidx, m, ytext in zip(range(2,5,2),
+#                              ms,
+#                              [.2,.2]):
+#        ax = subplot(2,2,pidx)
+#        for control_tag, yoffset in zip(control_tags,
+#                                        [1.0, 1.2]): 
+#            for xtext, bidx in  zip([.5, .9],
+#                                    [0, -1]):
+#                b=bs[bidx];
+#                mse = MeanSquaredErrors[Alpha_maxs[0]][m][control_tag][bidx]
+#                ax.annotate('%s:%.3f'%(control_tag,mse),
+#                    xy=(b, mse),
+#                    xytext=(xtext, ytext*yoffset),
+#                    arrowprops=dict(facecolor='black', shrink=0.05) )
+    
+    for pidx in range(1,5):
+        ax = subplot(2,2,pidx)
+        ax.text(-.2, 1.0, '(%s)'%chr(64 + pidx),
+                         horizontalalignment='center',
+                         verticalalignment='center',
+                         transform=ax.transAxes,
+                         fontsize = ABCD_LABEL_SIZE)
+    
+    fig_file_name = os.path.join(FIGS_DIR,
+                                 'SingleISI_ControlError_Stats.pdf')
+    
+    print 'saving to figure to ', fig_file_name
+    savefig(fig_file_name);
+    
+    
+    
+    
+        
 def SingleTrainStudy(resimulate = False):
     import cPickle
     N_spikes = 16;
@@ -1185,18 +1426,15 @@ if __name__ == '__main__':
     
     #Specify Target (Tag) for following runs:
 #    target_regime ='supthn_8' #'crit' #'suptln' # 'supthn' #'crit' #'suptln' #'crit' #'subthn'
-    target_regime ='subthn_6' 
+#    target_regime ='subthn_6' 
+
+
    
 
 #################        
-##### SIMULATE:
+##### SIMULATE / VISUALIZE:
 #################
-#    SimulateHarness()  
-
-#################        
-##### VISUALIZE:
-#################
-#    VisualizeHarness();    
+#    SimulateHarness(resimulate=False)  
 
                 
 #################        
@@ -1204,14 +1442,15 @@ if __name__ == '__main__':
 #################
 #    AnalyzeHarness();
     
-    
-  
+ ################# EXTRA STUFF: 
 #    NewCLControllerHarness()
 #    TimerHarness();
 #    ProfileHarness()
 
 ##### Correcness as function of beta study:
 #    NoiseRangeStudy(resimulate=False);
+    NoiseRangeStudySingleTf(resimulate=False,
+                            N_samples = 8000);
 
 ##### Correcness as function of beta study:
 #    SingleTrainStudy(resimulate=False);

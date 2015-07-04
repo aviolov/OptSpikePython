@@ -664,7 +664,8 @@ def calcGradH(tb = [.6, 1.25], Tf = 1.5, energy_eps = .001, alpha_bounds = (-2.,
     plot(ts, minus_grad_H, 'g', label=r'$-\nabla_\alpha \, H$', linewidth = 4); 
     plot(ts, alphas, 'r--', label=r'$\alpha_0(t)$', linewidth = 4);
     plot(ts, alpha_next, 'b--', label=r'$\alpha_1(t)$', linewidth = 4);
-    ylabel(r'$\alpha$', fontsize=24);xlabel('$t$', fontsize=24);    legend(loc='upper left')
+    ylabel(r'$\alpha$', fontsize=24);xlabel('$t$', fontsize=24);    
+    legend(loc='upper left')
     title('First Control Iteration', fontsize=36)
     
     if None != fig_name:
@@ -1638,7 +1639,8 @@ def visualizeRegimesSinglePlot(regimeParams,
     axc = cs_fig.add_subplot(111)
     axc.hold(True)
     for pidx, params in enumerate(regimeParams):
-        fbkSoln = FBKSolution.load(mu_beta_Tf = params[::2]+[Tf])
+        fbkSoln = FBKSolution.load(mu_beta_Tf = params[::2]+[Tf],
+                                   energy_eps = energy_eps)
         print 'mu,tc,b = %.2f,%.2f,%.2f'%(fbkSoln._mu,fbkSoln._tau_char, fbkSoln._beta) 
         ts,xs,cs = fbkSoln._ts, fbkSoln._xs, fbkSoln._cs_iterates[-1]
         
@@ -1660,8 +1662,8 @@ def visualizeRegimesSinglePlot(regimeParams,
     axc.set_yticklabels(('$%.1f$'%alpha_bounds[0], '$0$','$%.1f$'%alpha_bounds[1]),
                          fontsize = label_font_size)
     
-    axc.set_xticks((.5, 1., 1.5, ))
-    axc.set_xticklabels(('$0.5$' ,'$1.0$' ,'$1.5$'),
+    axc.set_xticks((0.75, 1.5, ))
+    axc.set_xticklabels(('$t^*/2$' ,'$t^*$'),
                          fontsize = label_font_size)
         
         
@@ -2163,8 +2165,8 @@ if __name__ == '__main__':
 #                     (mu_high/tau_char, beta_high):'SuperThresh,High-Noise', 
 #                     (mu_low/tau_char, beta_low)  :'SubThresh, Low-Noise', 
 #                     (mu_low/tau_char, beta_high) :'SubThresh, High-Noise'}
-    regimeTitles = {(mu_high/tau_char, beta_low) :'SuperT, low-noise',
-                      (mu_high/tau_char, beta_high):'SuperT, high-noise', 
+    regimeTitles = {(mu_high/tau_char, beta_low) :'SupraT, low-noise',
+                      (mu_high/tau_char, beta_high):'SupraT, high-noise', 
                      (mu_low/tau_char, beta_low)  :'SubT, low-noise', 
                      (mu_low/tau_char, beta_high) :'SubT, high-noise'}
         
@@ -2187,11 +2189,17 @@ if __name__ == '__main__':
 #    SuperThreshHighNoiseHarness(regimeParams[1],
 #                                regimeParams[0]);
 #    SuperThreshLowNoiseHarness(regimeParams[0])
-
+#
 #    visualizeRegimesSinglePlot(regimeParams,
 #                               regimeTitles,
 #                               Tf= 1.5,
+#                               energy_eps=.001,
 #                               fig_name = 'Regimes')
+    visualizeRegimesSinglePlot(regimeParams,
+                               regimeTitles,
+                               Tf= 1.5,
+                               energy_eps=.1,
+                               fig_name = 'RegimesHighEps')
     
 #    visualizeRegimes(regimeParams[2:],
 #                      Tf= 1.5,
@@ -2210,10 +2218,10 @@ if __name__ == '__main__':
 #                             Tf,
 #                             values_of_eps = [.001, .1],
 #                             fig_name = 'Regimes')
-    compareEffectOfEnergyEpsJoined(regimeParams, 
-                                   Tf,
-                                   values_of_eps = [.001, .1],
-                                   fig_name = 'Regimes')
+#    compareEffectOfEnergyEpsJoined(regimeParams, 
+#                                   Tf,
+#                                   values_of_eps = [.001, .1],
+#                                   fig_name = 'Regimes')
 
 
 ###########################

@@ -20,6 +20,8 @@ from matplotlib.patches import FancyArrowPatch, FancyArrow, ArrowStyle
 from AdjointSolver import FBKSolution, deterministicControlHarness
 from matplotlib.font_manager import FontProperties
 from PathSimulator import ABCD_LABEL_SIZE
+from pylab import figure, subplots_adjust, subplot, hold, plot, vlines, hlines,\
+                ylim, xlim,get_current_fig_manager, savefig
 
 RESULTS_DIR = '/home/alex/Workspaces/Python/OptSpike/Results/ControlSimulator/'
 FIGS_DIR = '/home/alex/Workspaces/Latex/OptSpike/Figs/ControlSimulator'
@@ -35,6 +37,11 @@ xlabel_font_size = 40
 
 from HJBSolver import HJBSolver, HJBSolution
 from collections import deque
+
+#PARAMETERS:
+mu_high = 1.5;    mu_low = .1
+tau_char = .5;
+beta_high = 1.5;  beta_low = .3;
 
 class SpikedPath():
     def __init__(self, ts, xs, cs, t_spike):
@@ -1003,7 +1010,9 @@ def visualizeTrajectoriesPaper(params, Tf,
                                fig_name = None, 
                                paths_to_show = [0,1,2,3,4,7],
                                subsample = 2,
-                               epsilon_value = [.001, .1]):
+                               epsilon_value = [0.001, 0.1],
+                               controls_show_list = ['OL', 'CL'],
+                               alpha_bounds = (-2,2)) :
     YLABEL_PATH = 0
     print 'm,tc,b =' , params
     cSimLowEps = ControlSimulation.load(loweps_file_name)
@@ -1023,8 +1032,13 @@ def visualizeTrajectoriesPaper(params, Tf,
             detPath, olPath, clPath= cSim._Paths_det[paths_to_show[path_idx]], \
                                          cSim._Paths_ol[paths_to_show[path_idx]],\
                                              cSim._Paths_cl[paths_to_show[path_idx]]
+            
+            control_colors = {'det':'b', 'OL':'g', 'CL':'r'} 
             for path_label,path in zip(['det', 'OL', 'CL'],
                                        [detPath, olPath,clPath]):
+                
+                if path_label not in controls_show_list:
+                    continue
                 
                 
                 subplot_idx = path_idx * 4 + eps_idx + 1
@@ -1032,7 +1046,8 @@ def visualizeTrajectoriesPaper(params, Tf,
                 xplot = path.xs[::subsample]; xplot[-1] = 1.
                 plot(path.ts[::subsample],xplot,
                      label=path_label,
-                     linewidth = 1.5); 
+                     linewidth = 1.5,
+                     color=control_colors[path_label]); 
                 vlines(Tf, -1.0, 1.0, colors='k')
                 hlines(1.0, .0, xmax, linestyles='dashed', colors='r', linewidth = 2.0)
                 
@@ -1052,7 +1067,8 @@ def visualizeTrajectoriesPaper(params, Tf,
                 axA = subplot(N_paths_shown*2, 2, subplot_idx);  hold(True)
                 plot(path.ts[::subsample], path.cs[::subsample],
                      label=path_label,
-                     linewidth = 2);
+                     linewidth = 2,
+                     color=control_colors[path_label]);
                 hlines(alpha_bounds, .0, xmax,
                         linestyles='dashed', colors='r', linewidth = 2.0)
                  
@@ -1079,7 +1095,7 @@ def visualizeTrajectoriesPaper(params, Tf,
                 
                 for ax in [axX, axA]:
                     ax.set_xticks((.0, 1.5))
-                    ax.set_xticklabels(('$0$', '$1.5$'), 
+                    ax.set_xticklabels(('$0$', '$t^*$'), 
                                     fontsize = label_font_size)
            
             if eps_idx == 0:
@@ -1101,6 +1117,8 @@ def visualizeTrajectoriesPaper(params, Tf,
         get_current_fig_manager().window.showMaximized()
             
 
+    
+    
 def simulateHighEpsilon(params, Tf, N_samples,
                         save_file_name='HighEps',
                         energy_eps = .1,
@@ -1343,7 +1361,9 @@ def analyzeSuperTHighNoise():
         
         visualizeRegimes(regimeParams, Tf, N_samples, fig_name = 'Regimes',
                      Nbins = 150)
+        
 def trajectoriesBox(params):
+    
     N_samples = 12
 #    randseeds = randint(1e12, size=N_samples)
 #    randseeds = [50145379756,58039389690,51422188979,87827186063,320667215726,
@@ -1364,27 +1384,54 @@ def trajectoriesBox(params):
 #                               loweps_file_name='LowEps_Trajs',
 #                               higheps_file_name='HighEps_Trajs',
 #                               paths_to_show = pts)
+#    
+    'Visualize Controlled Trajectories for the Paper )camera-ready):'
     visualizeTrajectoriesPaper(params, Tf, 
                                loweps_file_name='LowEps_Trajs',
                                higheps_file_name='HighEps_Trajs',
-                               paths_to_show = [6,8,11],                               
+                               paths_to_show = [6,8,11],       #[6,8,11] ~ used in JNE Paper                        
                                fig_name = 'Composite')
+
+
+
+
 
 ##################################################################
 ##################################################################
 ##################################################################
+
+def NoiseRangeStudy(resimulate = False):
+    
+    ms = [mu_high, mu_low]
+#    bs = arange(.2, 1.8, .2)
+    bs = arange(.2, 1.8, .9)
+    Tf = 1.5;
+    N_samples = 5 #
+    
+    for midx, m in enumerate(ms):
+        berrors = []
+        for bidx, b in enumerate(bs):
+            save_file_name = '%s_m=%.1f_b=%.1f'%('noiserange',
+                                                 m/tau_char, b)
+            control_params =  [m/tau_char, tau_char, b];
+            if resimulate:
+                ControlSimulationDriver(control_params, 
+                                        Tf,
+                                        N_samples,
+                                        alpha_bounds = [-2,2.],
+                                        save_file_name = save_file_name,
+                                        energy_eps= .001)
+            
 
 if __name__ == '__main__':
     from pylab import *
     
     Tf = 1.5; 
-    energy_eps = .001; alpha_bounds = (-2., 2.);
+    energy_eps = .001; 
+    alpha_bounds = (-2., 2.);
     
-    mu_high = 1.5;    mu_low = .1
-    tau_char = .5;
-    beta_high = 1.5;  beta_low = .3;
 #    regimeParams = [ [mu_low/tau_char, tau_char, beta_low] ]
-    
+   
     regimeParams = [ [mu_high/tau_char, tau_char, beta_low],
                      [mu_high/tau_char, tau_char, beta_high],
                      [mu_low/tau_char, tau_char, beta_low], 
@@ -1392,8 +1439,8 @@ if __name__ == '__main__':
     N_samples = 10000
     
 #    simulateRegimes(regimeParams, Tf, N_samples)
-    visualizeRegimes(regimeParams[0:], Tf, N_samples,
-                     fig_name = 'Regimes', Nbins = 150)
+#    visualizeRegimes(regimeParams[0:], Tf, N_samples,
+#                     fig_name = 'Regimes', Nbins = 150)
 #    latexifyRegimes(regimeParams, Tf, N_samples)
 
     
@@ -1411,6 +1458,7 @@ if __name__ == '__main__':
 
 #    visualizeControls(regimeParams, Tf, N_samples, fig_name = 'Controls')
 
+
 #    visualizeTrajectories(regimeParams[1], Tf, N_samples,
 #                          N_paths_to_show = 8,
 #                          fig_name = 'SubTHighNoise',
@@ -1418,10 +1466,15 @@ if __name__ == '__main__':
 
 
 ####################################
+#  The effect of Varying Epsilon (energy_eps)
+####################################
+    highEpsParams =  [mu_low/tau_char, tau_char, beta_high]
+    trajectoriesBox(params = highEpsParams)
+
+####################################
 #  The effect of Varying Epsilong (energy_eps)
 ####################################
-#    highEpsParams =  [mu_low/tau_char, tau_char, beta_high]
-#    trajectoriesBox(params = highEpsParams)
+#    NoiseRangeStudy(resimulate=True)
     
     
     show()

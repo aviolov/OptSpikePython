@@ -394,13 +394,14 @@ def visualizeControlSurfaces(regimeParams,
         ax.set_xlabel('$t$', fontsize = xlabel_font_size); 
         ax.set_ylabel('$x$',fontsize = xlabel_font_size)
         ax.set_zlabel(r'$\alpha(x,t)$', fontsize = xlabel_font_size);
+
         
         ticks = [ts[0], ts[-1]]
         ax.set_xticks(ticks)
         ax.set_xticklabels([r'$%.1f$'%tick for tick in ticks])
         ticks = [.0, xs[-1]]
         ax.set_yticks(ticks)
-        ax.set_yticklabels([r'$%.1f$'%tick for tick in ticks])
+        ax.set_yticklabels([r'$%.0f$'%tick for tick in ticks])
         max_v = 2.0 #amax(vs)
 #        yticks(ticks, [r'$%d$'%tick for tick in ticks])
         ticks = [ -2., .0, 2.0]
@@ -425,8 +426,7 @@ def visualizeControlSurfaces(regimeParams,
         lfig_name = os.path.join(FIGS_DIR, fig_name + '_control_surf.pdf')
         print 'saving to ', lfig_name
         savefig(lfig_name)
-    print ('WARNING: Early Return!!!')
-    return
+
 
 def visualizeRegimes(regimeParams,
                      Tf=1.5, energy_eps = .001, 
@@ -445,7 +445,9 @@ def visualizeRegimes(regimeParams,
                      top = .95, bottom = .05)
   
     for pidx, params in enumerate(regimeParams):
-        hjbSoln = HJBSolution.load(mu_beta_Tf = params[::2]+[Tf], energy_eps = energy_eps)
+        hjbSoln = HJBSolution.load(mu_beta_Tf = params[::2]+[Tf],
+                                    energy_eps = energy_eps)
+        print energy_eps
         print 'mu,tc,b = %.2f,%.2f,%.2f'%(hjbSoln._mu,hjbSoln._tau_char, hjbSoln._beta) 
         ts,xs,vs,cs = hjbSoln._ts, hjbSoln._xs, hjbSoln._vs, hjbSoln._cs
         xs = xs[1:-1];
@@ -476,25 +478,36 @@ def visualizeRegimes(regimeParams,
         ax.set_xlim((ts[0]-xoffset,ts[-1]+xoffset))
         ax.set_ylim((xs[0]-yoffset,xs[-1]+yoffset))       
         ax.set_xlabel('$t$', fontsize = xlabel_font_size); 
-        ax.set_zlabel(r'$\alpha(x,t)$', fontsize = xlabel_font_size);
+#        ax.set_zlabel(r'$\alpha(x,t)$', fontsize = xlabel_font_size);
 #        ax.set_ylabel(r'$x$', fontsize = xlabel_font_size);
 #        yx = [.2,.2,.25,.25]
         ax.text2D(.125, .2, '$x$',
             horizontalalignment='center', verticalalignment='center',
             transform=ax.transAxes,
             fontsize = xlabel_font_size)
+        ax.text2D(.05, .6, r'$\alpha(x,t)$',
+                         fontsize = xlabel_font_size,
+                         horizontalalignment='center',
+                         verticalalignment='center',
+                         transform=ax.transAxes)
         
         ticks = [ts[0], ts[-1]]
         ax.set_xticks(ticks)
         ax.set_xticklabels([r'$%.1f$'%tick for tick in ticks])
         ticks = [.0, xs[-1]]
         ax.set_yticks(ticks)
-        ax.set_yticklabels([r'$%.1f$'%tick for tick in ticks])
+        ax.set_yticklabels([r'$%.0f$'%tick for tick in ticks])
         max_a = 2.0 #amax(vs)
         min_a = -2.0 #amax(vs)
-        ticks = [min_a, max_a]
+        ax.set_zlim((min_a, max_a))
+        ticks = [max_a]
         ax.set_zticks(ticks)
-        ax.set_zticklabels([r'$%.1f$'%tick for tick in ticks])
+        ax.set_zticklabels([r'$%.0f$'%tick for tick in ticks])
+        ax.text2D(.10, .4, r'$%.0f$' %min_a,
+                         fontsize = label_font_size,
+                         horizontalalignment='center',
+                         verticalalignment='center',
+                         transform=ax.transAxes)
 
         for label in ax.xaxis.get_majorticklabels():
             label.set_fontsize(label_font_size)
@@ -1153,8 +1166,11 @@ if __name__ == '__main__':
 #    highEpsParams  = [mu_low/tau_char, tau_char, beta_high];
     
 #    solveRegimes(regimeParams, Tf, energy_eps=.001)
-    visualizeRegimes(regimeParams[:], Tf, 
-                    fig_name='Regimes')
+#    visualizeRegimes(regimeParams[:], Tf, 
+#                    fig_name='Regimes')
+#    visualizeRegimes(regimeParams[:], Tf, 
+#                     energy_eps = .1,
+#                    fig_name='RegimesHighEps')
 
 #    solveRegimes(regimeParams, Tf, energy_eps=.1)
 #    visualizeRegimes(regimeParams, Tf, energy_eps=.1,
